@@ -120,6 +120,36 @@ class FakeCursor(object):
     def __getattr__(self, name):
         return getattr(self.cursor, name)
 
+    def test(self):
+        '''
+        Test if it is a Tryton database.
+        '''
+        self.cursor.execute("SELECT relname " \
+                "FROM pg_class " \
+                "WHERE relkind = 'r' AND relname in (" \
+                "'inherit', "
+                "'ir_model', "
+                "'ir_model_field', "
+                "'ir_ui_view', "
+                "'ir_ui_menu', "
+                "'res_user', "
+                "'res_group', "
+                "'res_group_user_rel', "
+                "'wkf', "
+                "'wkf_activity', "
+                "'wkf_transition', "
+                "'wkf_instance', "
+                "'wkf_workitem', "
+                "'wkf_witm_trans', "
+                "'ir_module_category', "
+                "'ir_module_module', "
+                "'ir_module_module_dependency, '"
+                "'ir_translation, '"
+                "'ir_lang'"
+                ")")
+        return len(self.cursor.fetchall()) != 0
+
+
 class FakeDB:
 
     def __init__(self, connpool, dbname):
@@ -378,13 +408,17 @@ class table_handler:
         column_type = column_type[1]
         self.cursor.execute('ALTER TABLE "%s" ADD COLUMN "%s" %s' %
                        (self.table_name, column_name, column_type))
-        # Populate column with default values:
-        default = None
-        if default_fun is not None:
-            default = default_fun(self.cursor, 0, {})
-        self.cursor.execute('UPDATE "' + self.table_name + '" '\
-                            'SET "' + column_name + '" = ' + symbol_set[0],
-                            (symbol_set[1](default),))
+
+        # check if table is non-empty:
+        self.cursor.execute('SELECT 1 FROM "%s" limit 1' % self.table_name)
+        if self.cursor.rowcount:
+            # Populate column with default values:
+            default = None
+            if default_fun is not None:
+                default = default_fun(self.cursor, 0, {})
+            self.cursor.execute('UPDATE "' + self.table_name + '" '\
+                                'SET "' + column_name + '" = ' + symbol_set[0],
+                                (symbol_set[1](default),))
 
         self.update_definitions()
 

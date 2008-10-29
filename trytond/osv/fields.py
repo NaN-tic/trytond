@@ -67,8 +67,6 @@ class Column(object):
         self.translate = translate
         self._domain = domain or []
         self._context = context
-        self.group_name = False
-        self.view_load = 0
         if select not in (0, 1, 2):
             raise Exception('Error', 'Select must be one of 0, 1, 2')
         self.select = select
@@ -110,6 +108,13 @@ class Integer(Column):
         return ('int4', 'int4')
 
 
+class BigInteger(Integer):
+    _type = 'biginteger'
+
+    def sql_type(self):
+        return ('int8', 'int8')
+
+
 class Reference(Column):
     _type = 'reference'
     _classic_read = False
@@ -141,6 +146,10 @@ class Reference(Column):
                 ref_id = eval(ref_id)
             except:
                 pass
+            try:
+                ref_id = int(ref_id)
+            except:
+                continue
             if ref_id \
                 and not ref_obj.search(cursor, user, [
                     ('id', '=', ref_id),
@@ -670,6 +679,7 @@ class Property(Function):
 _TYPE2CLASS = {
 }
 
-for klass in (Boolean, Integer, Reference, Char, Sha, Text, Float, Numeric,
-        Date, DateTime, Time, Binary, Selection, Many2One, One2Many, Many2Many):
+for klass in (Boolean, Integer, BigInteger, Reference, Char, Sha, Text, Float,
+        Numeric, Date, DateTime, Time, Binary, Selection, Many2One, One2Many,
+        Many2Many):
     _TYPE2CLASS[klass._type] = klass

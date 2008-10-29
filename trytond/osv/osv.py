@@ -11,7 +11,7 @@ from trytond.sql_db import IntegrityError
 import traceback
 from trytond.tools import Cache, find_language_context
 import time
-from threading import Semaphore
+from threading import Lock
 from trytond.config import CONFIG
 import logging
 
@@ -90,10 +90,12 @@ class OSVService(Service):
             cursor.close()
         return res
 
-    def exec_workflow_cr(self, cursor, user, object_name, method, *args):
+    def exec_workflow_cr(self, cursor, user, object_name, method, object_id,
+            *args):
         wf_service = LocalService("workflow")
         try:
-            wf_service.trg_validate(user, object_name, args[0], method, cursor)
+            wf_service.trg_validate(user, object_name, object_id, method,
+                    cursor, *args)
         except Exception, exception:
             if CONFIG['verbose']:
                 tb_s = reduce(lambda x, y: x+y,
@@ -108,13 +110,14 @@ class OSVService(Service):
             raise
         return True
 
-    def exec_workflow(self, dbname, user, object_name, method, *args):
+    def exec_workflow(self, dbname, user, object_name, method, object_id,
+            *args):
         cursor = pooler.get_db(dbname).cursor()
         # TODO add retry when exception for concurency update
         try:
             try:
                 res = self.exec_workflow_cr(cursor, user, object_name, method,
-                        *args)
+                        object_id, *args)
                 cursor.commit()
             except Exception:
                 cursor.rollback()
@@ -200,11 +203,11 @@ class Cacheable(object):
         self.timestamp = None
         self.max_len = 1024
         self.timeout = 3600
-        self.semaphore = Semaphore()
+        self.lock = Lock()
         Cache._cache_instance.append(self)
 
     def add(self, cursor, key, value):
-        self.semaphore.acquire()
+        self.lock.acquire()
         try:
             self._cache.setdefault(cursor.dbname, {})
 
@@ -223,14 +226,14 @@ class Cacheable(object):
 
             self._cache[cursor.dbname][key] = (value, time.time())
         finally:
-            self.semaphore.release()
+            self.lock.release()
 
     def invalidate(self, cursor, key):
-        self.semaphore.acquire()
+        self.lock.acquire()
         try:
             del self._cache[cursor.dbname][key]
         finally:
-            self.semaphore.release()
+            self.lock.release()
 
     def get(self, cursor, key):
         try:
@@ -239,10 +242,10 @@ class Cacheable(object):
             return None
 
     def clear(self, cursor):
-        self.semaphore.acquire()
+        self.lock.acquire()
         try:
             self._cache.setdefault(cursor.dbname, {})
             self._cache[cursor.dbname].clear()
             Cache.reset(cursor.dbname, self.name)
         finally:
-            self.semaphore.release()
+            self.lock.release()

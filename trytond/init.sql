@@ -18,8 +18,6 @@ CREATE TABLE ir_model_field (
   relation varchar,
   field_description varchar,
   ttype varchar,
-  group_name varchar,
-  view_load boolean,
   help text,
   module varchar,
   primary key(id)
@@ -135,7 +133,7 @@ create table wkf_activity
     signal_send varchar,
     flow_start boolean,
     flow_stop boolean,
-    action varchar,
+    action text,
     primary key(id)
 );
 

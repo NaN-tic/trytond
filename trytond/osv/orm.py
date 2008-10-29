@@ -12,6 +12,7 @@ from lxml import etree
 import copy
 from trytond.sql_db import table_handler
 from decimal import Decimal
+import logging
 
 OPERATORS = (
         'child_of',
@@ -233,6 +234,8 @@ class BrowseRecord(object):
             res = res.id
         if isinstance(res, BrowseRecordList):
             res = res.get_eval()
+        if isinstance(res, BrowseRecordNull):
+            res = False
         return res
 
 
@@ -347,8 +350,7 @@ class ORM(object):
         cursor.execute('SELECT f.id AS id, f.name AS name, ' \
                     'f.field_description AS field_description, ' \
                     'f.ttype AS ttype, f.relation AS relation, ' \
-                    'f.group_name AS group_name, f.view_load AS view_load, ' \
-                    'f.module as module '\
+                    'f.module as module, f.help AS help '\
                 'FROM ir_model_field AS f, ir_model AS m ' \
                 'WHERE f.model = m.id ' \
                     'AND m.model = %s ',
@@ -380,30 +382,21 @@ class ORM(object):
             if k not in columns:
                 cursor.execute("INSERT INTO ir_model_field " \
                         "(model, name, field_description, ttype, " \
-                            "relation, group_name, view_load, help, module) " \
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                            "relation, help, module) " \
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (model_id, k, field.string, field._type,
-                            field._obj or '', field.group_name or '',
-                            (field.view_load and 'True') or 'False',
-                            field.help, module_name))
+                            field._obj or '', field.help, module_name))
             elif columns[k]['field_description'] != field.string \
                     or columns[k]['ttype'] != field._type \
                     or columns[k]['relation'] != (field._obj or '') \
-                    or columns[k]['group_name'] != (field.group_name or '') \
-                    or columns[k]['view_load'] != \
-                        ((field.view_load and 'True') or 'False') \
                     or columns[k]['help'] != field.help:
                 cursor.execute('UPDATE ir_model_field ' \
                         'SET field_description = %s, ' \
                             'ttype = %s, ' \
                             'relation = %s, ' \
-                            'group_name = %s, ' \
-                            'view_load = %s, ' \
                             'help = %s ' \
                         'WHERE id = %s ',
                         (field.string, field._type, field._obj or '',
-                            field.group_name or '',
-                            (field.view_load and 'True') or 'False',
                             field.help, columns[k]['id']))
             trans_name = self._name + ',' + k
             if trans_name not in trans_columns:
@@ -483,18 +476,19 @@ class ORM(object):
         table = table_handler(cursor, self._table, self._name, module_name)
         logs = (
             ('create_date', 'timestamp', 'TIMESTAMP',
-                fields.DateTime._symbol_set),
+                fields.DateTime._symbol_set, lambda *a: datetime.datetime.now()),
             ('write_date', 'timestamp', 'TIMESTAMP',
-                fields.DateTime._symbol_set),
+                fields.DateTime._symbol_set, None),
             ('create_uid', 'int4',
              'INTEGER REFERENCES res_user ON DELETE SET NULL',
-             fields.Integer._symbol_set),
+             fields.Integer._symbol_set, lambda *a: 0),
             ('write_uid', 'int4',
              'INTEGER REFERENCES res_user ON DELETE SET NULL',
-             fields.Integer._symbol_set),
+             fields.Integer._symbol_set, None),
             )
         for log in logs:
-            table.add_raw_column(log[0], (log[1], log[2]), log[3], migrate=False)
+            table.add_raw_column(log[0], (log[1], log[2]), log[3],
+                    default_fun=log[4], migrate=False)
         for field_name, field in self._columns.iteritems():
             default_fun = None
             if field_name in (
@@ -1010,7 +1004,8 @@ class ORM(object):
         Return list of a dict for each ids or just a dict if ids is an integer.
         The dict have fields_names as keys.
         '''
-        self.pool.get('ir.model.access').check(cursor, user, self._name, 'read')
+        self.pool.get('ir.model.access').check(cursor, user, self._name, 'read',
+                context=context)
         if not fields_names:
             fields_names = self._columns.keys() + \
                     exclude(self._inherit_fields.keys(), self._columns.keys())
@@ -1066,6 +1061,22 @@ class ORM(object):
                             'AS _timestamp']
                 else:
                     fields_pre2 += ['now()::timestamp AS _timestamp']
+
+            if len(ids) > cursor.IN_MAX:
+                cursor.execute('SELECT id ' \
+                        'FROM ' + table_query + '"' + self._table + '" ' \
+                        'ORDER BY ' + \
+                        ','.join([self._table + '.' + x[0] + ' ' + x[1]
+                            for x in self._order]), table_args)
+
+                i = 0
+                ids_sorted = {}
+                for row in cursor.fetchall():
+                    ids_sorted[row[0]] = i
+                    i += 1
+                ids = ids[:]
+                ids.sort(lambda x, y: ids_sorted[x] - ids_sorted[y])
+
             for i in range(0, len(ids), cursor.IN_MAX):
                 sub_ids = ids[i:i + cursor.IN_MAX]
                 if domain1:
@@ -1398,7 +1409,7 @@ class ORM(object):
             del context['_timestamp']
 
         self.pool.get('ir.model.access').check(cursor, user, self._name,
-                'delete')
+                'delete', context=context)
 
         cursor.execute(
             "SELECT id FROM wkf_instance "\
@@ -1411,7 +1422,8 @@ class ORM(object):
 
         wf_service = LocalService("workflow")
         for obj_id in ids:
-            wf_service.trg_delete(user, self._name, obj_id, cursor)
+            wf_service.trg_delete(user, self._name, obj_id, cursor,
+                    context=context)
 
         if not self.check_xml_record(cursor, user, ids, None, context=context):
             self.raise_user_error(cursor, 'delete_xml_record',
@@ -1536,7 +1548,7 @@ class ORM(object):
             del context['_timestamp']
 
         self.pool.get('ir.model.access').check(cursor, user, self._name,
-                'write')
+                'write', context=context)
 
         if 'write_uid' in vals:
             del vals['write_uid']
@@ -1688,7 +1700,8 @@ class ORM(object):
 
         wf_service = LocalService("workflow")
         for obj_id in ids:
-            wf_service.trg_write(user, self._name, obj_id, cursor)
+            wf_service.trg_write(user, self._name, obj_id, cursor,
+                    context=context)
         return True
 
     def __clean_defaults(self, defaults):
@@ -1726,7 +1739,7 @@ class ORM(object):
         vals = vals.copy()
 
         self.pool.get('ir.model.access').check(cursor, user, self._name,
-                'create')
+                'create', context=context)
 
         if 'create_uid' in vals:
             del vals['create_uid']
@@ -1828,7 +1841,7 @@ class ORM(object):
                 self._update_tree(cursor, user, id_new, k, field.left, field.right)
 
         wf_service = LocalService("workflow")
-        wf_service.trg_create(user, self._name, id_new, cursor)
+        wf_service.trg_create(user, self._name, id_new, cursor, context=context)
         return id_new
 
     def fields_get(self, cursor, user, fields_names=None, context=None):
@@ -1845,7 +1858,7 @@ class ORM(object):
             res.update(self.pool.get(parent).fields_get(cursor, user,
                 fields_names, context))
         write_access = model_access_obj.check(cursor, user, self._name, 'write',
-                raise_exception=False)
+                raise_exception=False, context=context)
         if self.table_query(context):
             write_access = False
 
@@ -1982,14 +1995,27 @@ class ORM(object):
                         for field in element:
                             if field.tag in ('form', 'tree', 'graph'):
                                 field2 = copy.copy(field)
-                                if field2.get('string') \
-                                        and 'language' in context:
-                                    trans = translation_obj._get_source(cursor,
-                                            self._name, 'view',
-                                            context['language'],
-                                            field2.get('string'))
-                                    if trans:
-                                        field2.set('string', trans)
+
+                                def _translate_field(field):
+                                    if field.get('string'):
+                                        trans = translation_obj._get_source(
+                                                cursor, self._name, 'view',
+                                                context['language'],
+                                                field.get('string'))
+                                        if trans:
+                                            field.set('string', trans)
+                                    if field.get('sum'):
+                                        trans = translation_obj._get_source(
+                                                cursor, self._name, 'view',
+                                                context['language'],
+                                                field.get('sum'))
+                                        if trans:
+                                            field.set('sum', trans)
+                                    for field_child in field:
+                                        _translate_field(field_child)
+                                if 'language' in context:
+                                    _translate_field(field2)
+
                                 xarch, xfields = self.pool.get(relation
                                         )._view_look_dom_arch(cursor, user,
                                                 field2, field.tag,
@@ -2027,35 +2053,6 @@ class ORM(object):
                     context)
             if result:
                 element.set('string', result)
-
-        # Add view for properties !
-        if element.tag == 'properties':
-            parent = element.getparent()
-            models = ["'" + x + "'" for x in  [self._name] + \
-                    self._inherits.keys()]
-            cursor.execute('SELECT f.name AS name, ' \
-                        'f.group_name AS group_name ' \
-                    'FROM ir_model_field AS f, ir_model AS m ' \
-                    'WHERE f.model = m.id ' \
-                        'AND m.model in (' + ','.join(models) + ') ' \
-                        'AND f.view_load ORDER BY f.group_name, f.id')
-            oldgroup = None
-            for fname, gname in cursor.fetchall():
-                if oldgroup != gname:
-                    child = etree.Element('separator')
-                    child.set('string', gname)
-                    child.set('colspan', '4')
-                    oldgroup = gname
-                    parent.insert(parent.index(element), child)
-
-                child = etree.Element('label')
-                child.set('name', fname)
-                parent.insert(parent.index(element), child)
-                child = etree.Element('field')
-                child.set('name', fname)
-                parent.insert(parent.index(element), child)
-            parent.remove(element)
-            element = parent
 
         if childs:
             for field in element:
@@ -2949,50 +2946,87 @@ class ORM(object):
         default can be a dict with field name as keys,
         it will replace the value of the record.
         '''
+        lang_obj = self.pool.get('ir.lang')
         if default is None:
             default = {}
+        if context is None:
+            context = {}
         if 'state' not in default:
             if 'state' in self._defaults:
                 default['state'] = self._defaults['state'](cursor, user,
                         context)
+
+        def convert_data(fields, data):
+            for field_name in fields:
+                ftype = fields[field_name]['type']
+
+                if field_name in (
+                    'create_date',
+                    'create_uid',
+                    'write_date',
+                    'write_uid',
+                    ):
+                    del data[field_name]
+
+                if field_name in default:
+                    data[field_name] = default[field_name]
+                elif ftype == 'function':
+                    del data[field_name]
+                elif ftype == 'many2one':
+                    try:
+                        data[field_name] = data[field_name] and \
+                                data[field_name][0]
+                    except:
+                        pass
+                elif ftype in ('one2many',):
+                    res = []
+                    rel = self.pool.get(fields[field_name]['relation'])
+                    for rel_id in data[field_name]:
+                        # the lines are first duplicated using the wrong (old)
+                        # parent but then are reassigned to the correct one thanks
+                        # to the ('add', ...)
+                        res.append(('add', rel.copy(cursor, user, rel_id,
+                            context=context)))
+                    data[field_name] = res
+                elif ftype == 'many2many':
+                    data[field_name] = [('set', data[field_name])]
+            if 'id' in data:
+                del data['id']
+            for i in self._inherits:
+                if self._inherits[i] in data:
+                    del data[self._inherits[i]]
+
         data = self.read(cursor, user, object_id, context=context)
-        fields2 = self.fields_get(cursor, user)
-        for field in fields2:
-            ftype = fields2[field]['type']
+        fields = self.fields_get(cursor, user)
+        convert_data(fields, data)
+        new_id = self.create(cursor, user, data, context=context)
 
-            if field in (
-                'create_date',
-                'create_uid',
-                'write_date',
-                'write_uid',
-                ):
-                del data[field]
+        fields_translate = {}
+        for field_name, field in fields.iteritems():
+            if field_name in self._columns and \
+                    self._columns[field_name].translate:
+                fields_translate[field_name] = field
+            elif field_name in self._inherit_fields and \
+                    self._inherit_fields[field_name][2].translate:
+                fields_translate[field_name] = field
 
-            if field in default:
-                data[field] = default[field]
-            elif ftype == 'function':
-                del data[field]
-            elif ftype == 'many2one':
-                try:
-                    data[field] = data[field] and data[field][0]
-                except:
-                    pass
-            elif ftype in ('one2many',):
-                res = []
-                rel = self.pool.get(fields2[field]['relation'])
-                for rel_id in data[field]:
-                    # the lines are first duplicated using the wrong (old)
-                    # parent but then are reassigned to the correct one thanks
-                    # to the ('add', ...)
-                    res.append(('add', rel.copy(cursor, user, rel_id,
-                        context=context)))
-                data[field] = res
-            elif ftype == 'many2many':
-                data[field] = [('set', data[field])]
-        del data['id']
-        for i in self._inherits:
-            del data[self._inherits[i]]
-        return self.create(cursor, user, data, context=context)
+        if fields_translate:
+            lang_ids = lang_obj.search(cursor, user, [
+                ('translatable', '=', True),
+                ], context=context)
+            if lang_ids:
+                lang_ids += lang_obj.search(cursor, user, [
+                    ('code', '=', 'en_US'),
+                    ], context=context)
+                langs = lang_obj.browse(cursor, user, lang_ids, context=context)
+                for lang in langs:
+                    ctx = context.copy()
+                    ctx['language'] = lang.code
+                    data = self.read(cursor, user, object_id,
+                            fields_names=fields_translate.keys(), context=ctx)
+                    convert_data(fields_translate, data)
+                    self.write(cursor, user, new_id, data, context=ctx)
+        return new_id
 
     def search_read(self, cursor, user, args, offset=0, limit=None, order=None,
             context=None, fields_names=None, load='_classic_read'):

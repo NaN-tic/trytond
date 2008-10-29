@@ -173,6 +173,13 @@ class DB(Service):
         res = stdout.close()
         if res:
             raise Exception, "Couldn't restore database"
+        cursor = pooler.get_db_only(db_name, verbose=False).cursor()
+        if not cursor.test():
+            cursor.close()
+            pooler.close_db(db_name)
+            raise Exception, "Couldn't restore database"
+        cursor.close()
+        pooler.close_db(db_name)
         logger.info('RESTORE DB: %s' % (db_name))
         return True
 
@@ -220,7 +227,15 @@ class DB(Service):
                         "WHERE datname not in " \
                             "('template0', 'template1','postgres') " \
                         "ORDER BY datname")
-            res = [name for (name,) in cursor.fetchall()]
+            res = []
+            for db_name, in cursor.fetchall():
+                cursor2 = pooler.get_db_only(db_name, verbose=False).cursor()
+                if not cursor2.test():
+                    cursor2.close()
+                    pooler.close_db(db_name)
+                else:
+                    cursor2.close()
+                    res.append(db_name)
             cursor.close()
         except:
             res = []
