@@ -226,6 +226,7 @@ field,"ir.ui.menu,name",0,Menu,Menü,0
 field,"ir.ui.menu,parent",0,Parent Menu,Übergeordnet (Menü),0
 field,"ir.ui.menu,sequence",0,Sequence,Sequenz,0
 field,"ir.ui.view,arch",0,View Architecture,Architektur Sicht,0
+field,"ir.ui.view,domain",0,Domain,Domain,0
 field,"ir.ui.view,field_childs",0,Childs Field,Untergeordnetes Feld,0
 field,"ir.ui.view,inherit",0,Inherited View,Vererbte Sicht,0
 field,"ir.ui.view,model",0,Model,Modell,0
@@ -485,7 +486,7 @@ view,ir.model,0,Fields Description,Feld Beschreibung,0
 view,ir.model,0,Model Description,Modell Beschreibung,0
 view,ir.model.access,0,Access controls,Zugriffsberechtigungen,0
 view,ir.model.field,0,Fields,Felder,0
-view,ir.module.module,0,Cancel Installation,Installation abbrechen,0
+view,ir.module.module,0,Cancel Installation,Vormerkung für Installation / Aktualisierung aufheben,0
 view,ir.module.module,0,Cancel Uninstallation,Deinstallation abbrechen,0
 view,ir.module.module,0,Cancel Upgrade,Vormerkung für Installation / Aktualisierung aufheben,0
 view,ir.module.module,0,Dependencies,Abhängigkeiten,0
