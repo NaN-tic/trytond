@@ -7,13 +7,23 @@ class TableHandlerInterface(object):
     Define generic interface to handle database table
     '''
 
-    def __init__(self, cursor, table_name, object_name=None, module_name=None,
-            history=False):
+    def __init__(self, cursor, model, module_name=None, history=False):
+        '''
+        :param cursor: the database cursor
+        :param model: the Model linked to the table
+        :param module_name: the module name
+        :param history: a boolean to define if it is a history table
+        '''
         super(TableHandlerInterface, self).__init__()
         self.cursor = cursor
-        self.table_name = table_name
-        self.object_name = object_name
+        if history:
+            self.table_name = model._table + '__history'
+        else:
+            self.table_name = model._table
+        self.object_name = model._name
+        self.sequence_name = model._sequence
         self.module_name = module_name
+        self.history = history
 
     @staticmethod
     def table_exist(cursor, table_name):
@@ -23,6 +33,39 @@ class TableHandlerInterface(object):
         :param cursor: the database cursor
         :param table_name: the table name
         :return: a boolean
+        '''
+        raise
+
+    @staticmethod
+    def table_rename(cursor, old_name, new_name):
+        '''
+        Rename table
+
+        :param cursor: the database cursor
+        :param old_name: the old table name
+        :param new_name: the new table name
+        '''
+        raise
+
+    @staticmethod
+    def sequence_exist(cursor, sequence_name):
+        '''
+        Sequence exist
+
+        :param cursor: the database cursor
+        :param sequence_name: the sequence name
+        :return: a boolean
+        '''
+        raise
+
+    @staticmethod
+    def sequence_rename(cursor, old_name, new_name):
+        '''
+        Rename sequence
+
+        :param cursor: the database cursor
+        :param old_name: the old sequence name
+        :param new_name: the new sequence name
         '''
         raise
 

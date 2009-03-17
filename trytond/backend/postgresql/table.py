@@ -8,31 +8,34 @@ import logging
 
 class TableHandler(TableHandlerInterface):
 
-    def __init__(self, cursor, table_name, object_name=None, module_name=None,
-            history=False):
-        super(TableHandler, self).__init__(cursor, table_name,
-                object_name=object_name, module_name=module_name)
+    def __init__(self, cursor, model, module_name=None, history=False):
+        super(TableHandler, self).__init__(cursor, model,
+                module_name=module_name)
         self._columns = {}
         self._constraints = []
         self._fk_deltypes = {}
         self._indexes = {}
         self._field2module = {}
 
+        # Create sequence if necessary
+        if not self.history and \
+                not self.sequence_exist(self.cursor, self.sequence_name):
+            self.cursor.execute('CREATE SEQUENCE "%s"' % self.sequence_name)
+
         # Create new table if necessary
         if not self.table_exist(self.cursor, self.table_name):
-            if not history:
-                self.cursor.execute('CREATE TABLE "%s" ' \
-                                "(id SERIAL NOT NULL, " \
-                                "PRIMARY KEY(id))"% self.table_name)
-            else:
-                self.cursor.execute('CREATE TABLE "%s" ' \
-                        '(id INTEGER)' % self.table_name)
+            self.cursor.execute('CREATE TABLE "%s" ' \
+                    '(id INTEGER NOT NULL)' % self.table_name)
+            if not self.history:
+                self.cursor.execute('ALTER TABLE "%s" ' \
+                        'ADD PRIMARY KEY(id)' % self.table_name)
         self._update_definitions()
         if 'id' not in self._columns:
             self.cursor.execute('ALTER TABLE "%s" ' \
-                    'ADD COLUMN id SERIAL NOT NULL' % self.table_name)
-            self.cursor.execute('ALTER TABLE "%s" ' \
-                    'ADD PRIMARY KEY(id)' % self.table_name)
+                    'ADD COLUMN id INTEGER NOT NULL' % self.table_name)
+            if not self.history:
+                self.cursor.execute('ALTER TABLE "%s" ' \
+                        'ADD PRIMARY KEY(id)' % self.table_name)
             self._update_definitions()
 
     @staticmethod
@@ -41,6 +44,26 @@ class TableHandler(TableHandlerInterface):
                            "WHERE relkind = 'r' AND relname = %s",
                        (table_name,))
         return bool(cursor.rowcount)
+
+    @staticmethod
+    def table_rename(cursor, old_name, new_name):
+        if TableHandler.table_exist(cursor, old_name) and \
+                not TableHandler.table_exist(cursor, new_name):
+            cursor.execute('ALTER TABLE "%s" RENAME TO "%s"' % \
+                    (old_name, new_name))
+
+    @staticmethod
+    def sequence_exist(cursor, sequence_name):
+        cursor.execute('SELECT relname FROM pg_class ' \
+                'WHERE relkind = \'S\' and relname = %s', (sequence_name,))
+        return bool(cursor.rowcount)
+
+    @staticmethod
+    def sequence_rename(cursor, old_name, new_name):
+        if TableHandler.sequence_exist(cursor, old_name) and \
+                not TableHandler.sequence_exist(cursor, new_name):
+            cursor.execute('ALTER TABLE "%s" RENAME TO "%s"' % \
+                    (old_name, new_name))
 
     def column_exist(self, column_name):
         return column_name in self._columns
