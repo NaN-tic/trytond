@@ -1,6 +1,5 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from __future__ import with_statement
 import time
 import locale
 import os
@@ -144,6 +143,7 @@ _LOCALE2WIN32 = {
     'zh_TW': 'Chinese_Taiwan',
 }
 
+
 def locale_strftime(lang):
     time_locale = {
         '%a': [],
@@ -188,7 +188,19 @@ if __name__ == '__main__':
 ''')
         time_locale = {}
         fp.write('TIME_LOCALE = \\\n')
-        for lang in ('cs_CZ', 'de_DE', 'en_US', 'es_ES', 'es_CO', 'fr_FR'):
+        for lang in [
+                'bg_BG',
+                'ca_ES',
+                'cs_CZ',
+                'de_DE',
+                'en_US',
+                'es_AR',
+                'es_ES',
+                'es_CO',
+                'fr_FR',
+                'nl_NL',
+                'ru_RU',
+                ]:
             time_locale[lang] = locale_strftime(lang)
             #fp.write('"' + lang + '": ' + repr(time_locale) + ',\n')
         #fp.write('}\n')

@@ -1,42 +1,147 @@
-Version 2.0.13 - 2013-12-04
-* Bug fixes (see mercurial logs for details)
+* Add Len to PYSON
+* Use bcrypt to hash password if possible
+* Use a sequence of ids, values to set fields
+* Client side actions on button and wizard
+* Add depends attribute to data tag
+* Add tree_invisible attribute to button in tree view
+* Drop support of Python 2.6
+* Deprecate on_change, on_change_with, selection_change_with and autocomplete
+  field arguments
+* Add fields.depends decorator
+* Add run-tests
+* Validate only modified and dependant fields on model write
+* Improve error messages by showing the failing value
+* Remove relation field actions:
+    - delete_all
+    - unlink_all
+    - set
+* Rename relation field action unlink into remove
+* Use a sequence of records, values in write
+* set_context of Transaction.set_user is restricted to root
+* Add a "copy" action to One2Many and Many2Many's set method
+* Force UTC as timezone (migration script available on tryton-tools)
+* Add relation_field for many2one
 
-Version 2.0.12 - 2013-10-01
+Version 3.0.0 - 2013-10-21
 * Bug fixes (see mercurial logs for details)
+* Allow customization of translation in po files
+* Use python-sql
+* Add convert_domain method on Fields
+* Add sql_format and sql_type methods on Fields
+* Allow to return a full domain for Function.searcher
+* Replace static backend by dynamic get method
+* Replace order_field by order_<field name> method
+* Allow field One2One in check_recursion
+* Remove the default order on MPTT
+* Add grouped attribute to data tag
+* Store selection tree state
+* Add order to Action Window
+* Add factor on number fields
+* Add calendar view
+* Remove request
 
-Version 2.0.11 - 2013-07-22
+Version 2.8.0 - 2013-04-22
 * Bug fixes (see mercurial logs for details)
+* Allow to search on target of Reference field
+* Remove _inherits
+* Add dynamic label
+* Add prefix, suffix on tree view
+* Replace _constraints with validate in ModelStorage
+* Add selection_change_with on Selection and Reference fields
+* Add Dict fields
+* Remove unique constraint on model and field access
+* Use lists of values in create
+* (Field, Operator, Operand) are replaced by Domain on Rule
+* Add global search
+* Replace view shortcut by menu favorite
+* Store default language in database
+* Add icon attribute on fields
+* Prevent Wizard State name to start with '_'
+* Add completion attribute for Many2One, Many2Many and One2Many
+* Add ViewSearch
+* Add domains on Action Window
 
-Version 2.0.10 - 2013-06-09
+Version 2.6.0 - 2012-10-22
 * Bug fixes (see mercurial logs for details)
+* Add pre-validation
+* Allow to use XML file for views
+* Add RPC definition
+* Repace BrowseRecord by Model instance
+* Replace Cache decorator by a simple LRU Cache
+* Remove Cacheable
+* Remove _description
+* Rename _name by __name__
+* Use class in Pool
+* Fix search button clause in ModelButton.get_groups (CVE-2012-2238)
+* Merge all kind of buttons
+* Use XML id for board action instead of id
+* Add states attribute to notebook
+* Allow to use tuple for Reference
+* Add constant interpolation on line graph
+* Add create/delete field access
+* Add dynamic size limit on the One2Many, Many2Many and Char
+* Replace __tryton__.py by tryton.cfg
+* Allow to use Reference field in One2Many & Many2Many
+* Remove hexmd5 from ModelView.fields_view_get
+* Allow client to manage model access
+* Add time format validation
+* Remove ModelSQL.default_sequence
 
-Version 2.0.9 - 2013-05-02
-* Bug fixes (see mercurial logs for details)
-
-Version 2.0.8 - 2012-12-23
-* Bug fixes (see mercurial logs for details)
-
-Version 2.0.7 - 2012-11-05
-* Bug fixes (see mercurial logs for details)
-
-Version 2.0.6 - 2012-09-10
-* Bug fixes (see mercurial logs for details)
-
-Version 2.0.5 - 2012-05-07
-* Bug fixes (see mercurial logs for details)
-
-Version 2.0.4 - 2012-03-28
+Version 2.4.0 - 2012-04-23
 * Bug fixes (see mercurial logs for details)
 * Don't allow rpc call on ModelStorage without ModelView (CVE-2012-0215)
+* Add shared WebDAV
+* Remove workflow module
+* Simplify workflow engine
+* Add ir.model.button for access rights
+* Replace fill by expand
+* Integer, Numeric and Float allow None as value
+* NULL value is None and not False
+* Replace user action by a list of actions
+* Add group call to on_change_with
+* Allow to get fuzzy translation
+* Allow to customize server timezone
+* Add richtext widget for WYSIWYG editor
+* Add support of fields.Time
+* Replace nested view by reference id
+* Remove underscore to ir.translation methods
+* Add default database language code
+* Add extras_depend to module definition
+* Store session in database
+* New Wizard design
+* Add pyson.Id
+* Use XML-RPC struct for Decimal and Date
+* Remove change_default on fields
 
-Version 2.0.3 - 2011-12-26
+Version 2.2.0 - 2011-10-24
 * Bug fixes (see mercurial logs for details)
-
-Version 2.0.2 - 2011-10-01
-* Bug fixes (see mercurial logs for details)
-
-Version 2.0.1 - 2011-05-29
-* Bug fixes (see mercurial logs for details)
+* Remove name field in ir.property
+* Add wizard to show views
+* Switched from .csv to .po for translations
+* Search on Many2One fields include inactive records
+* Change select on fields into Boolean
+* Change format of search_value on ir.action.act_window
+* Manage relation field access
+* Support size format in context for Binary fields
+* Use buffer for Binary fields
+* No more store Binary fields in base64
+* Remove tabpos attribute on notebook
+* Make PYSON more Pythonic
+* Add readonly on Transaction
+* Add has_returning on Cursor
+* Remove use of python code in workflow XML
+* Use SQL sequence on PostgreSQL for ir.sequence
+* Allow to specify more than one interface
+* Use unoconv for report format conversion
+* Allow to use any Opendocument as report template
+* Drop NetRPC and activate JSON-RPC by default
+* Remove ir.action.wizard_size
+* Rename expand and fill attributes into yexpand and yfill
+* Add xalign and yalign as field attributes
+* Drop support of Python 2.5
+* Remove support of Many2Many field in record XML
+* Change Pool into a Singleton
+* Remove support of zipped modules
 
 Version 2.0.0 - 2011-04-26
 * Bug fixes (see mercurial logs for details)

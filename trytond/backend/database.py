@@ -1,13 +1,16 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
+from trytond.const import MODEL_CACHE_SIZE
 
 DatabaseIntegrityError = None
 DatabaseOperationalError = None
+
 
 class DatabaseInterface(object):
     '''
     Define generic interface for database connection
     '''
+    flavor = None
 
     def __new__(cls, database_name=''):
         return object.__new__(cls)
@@ -23,7 +26,7 @@ class DatabaseInterface(object):
         '''
         raise NotImplementedError
 
-    def cursor(self, autocommit=False):
+    def cursor(self, autocommit=False, readonly=False):
         '''
         Retreive a cursor on the database
 
@@ -38,7 +41,8 @@ class DatabaseInterface(object):
         '''
         raise NotImplementedError
 
-    def create(self, cursor, database_name):
+    @staticmethod
+    def create(cursor, database_name):
         '''
         Create a database
 
@@ -46,7 +50,8 @@ class DatabaseInterface(object):
         '''
         raise NotImplementedError
 
-    def drop(self, cursor, database_name):
+    @staticmethod
+    def drop(cursor, database_name):
         '''
         Drop a database
 
@@ -99,7 +104,6 @@ class CursorInterface(object):
     '''
     Define generic interface for database cursor
     '''
-    sql_log = False
     IN_MAX = 1000
 
     def __init__(self):
@@ -112,6 +116,7 @@ class CursorInterface(object):
         :param context: the context
         :return: the cache dictionary
         '''
+        from trytond.cache import LRUDict
         from trytond.transaction import Transaction
         user = Transaction().user
         if context is None:
@@ -121,7 +126,8 @@ class CursorInterface(object):
                 '_delete_records'):
             if i in cache_ctx:
                 del cache_ctx[i]
-        return self.cache.setdefault((user, repr(cache_ctx)), {})
+        return self.cache.setdefault((user, repr(cache_ctx)),
+            LRUDict(MODEL_CACHE_SIZE))
 
     def execute(self, sql, params=None):
         '''
@@ -144,13 +150,15 @@ class CursorInterface(object):
         '''
         Commit the cursor
         '''
-        self.cache = {}
+        for cache in self.cache.itervalues():
+            cache.clear()
 
     def rollback(self):
         '''
         Rollback the cursor
         '''
-        self.cache = {}
+        for cache in self.cache.itervalues():
+            cache.clear()
 
     def test(self):
         '''
@@ -204,17 +212,6 @@ class CursorInterface(object):
         '''
         raise NotImplementedError
 
-    def limit_clause(self, select, limit=None, offset=None):
-        '''
-        Return SELECT queries with limit and offset
-
-        :param select: the SELECT query string
-        :param limit: the limit
-        :param offset: the offset
-        :return: a string
-        '''
-        raise NotImplementedError
-
     def update_auto_increment(self, table, value):
         '''
         Update auto_increment value of table
@@ -223,3 +220,11 @@ class CursorInterface(object):
         :param value: the auto_increment value
         '''
         pass
+
+    def has_returning(self):
+        '''
+        Return True if database implements RETURNING clause in INSERT or UPDATE
+        statements.
+
+        :return: a boolean
+        '''

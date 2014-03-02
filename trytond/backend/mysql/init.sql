@@ -1,3 +1,9 @@
+CREATE TABLE ir_configuration (
+    id BIGINT AUTO_INCREMENT NOT NULL,
+    language VARCHAR(255),
+    PRIMARY KEY(id)
+) ENGINE=InnoDB;
+
 CREATE TABLE ir_model (
     id BIGINT AUTO_INCREMENT NOT NULL,
     model VARCHAR(255) NOT NULL,
@@ -24,7 +30,7 @@ CREATE TABLE ir_ui_view (
     id BIGINT AUTO_INCREMENT NOT NULL,
     model VARCHAR(255) NOT NULL,
     type VARCHAR(255),
-    arch TEXT NOT NULL,
+    data TEXT NOT NULL,
     field_childs VARCHAR(255),
     priority BIGINT NOT NULL default 0,
     PRIMARY KEY(id)
@@ -45,7 +51,7 @@ CREATE TABLE ir_translation (
     src TEXT,
     src_md5 VARCHAR(32) NOT NULL,
     name VARCHAR(255) NOT NULL,
-    res_id BIGINT NOT NULL DEFAULT 0,
+    res_id BIGINT,
     value TEXT,
     type VARCHAR(255),
     module VARCHAR(255),
@@ -85,79 +91,10 @@ CREATE TABLE res_group (
 ) ENGINE=InnoDB;
 
 CREATE TABLE `res_user-res_group` (
-    uid BIGINT NOT NULL,
-    gid BIGINT NOT NULL,
-    CONSTRAINT `res_user-res_group_uid_fkey` FOREIGN KEY (uid) REFERENCES res_user (id) ON DELETE CASCADE,
-    CONSTRAINT `res_user-res_group_gid_fkey` FOREIGN KEY (gid) REFERENCES res_group (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
-
-CREATE TABLE wkf (
-    id BIGINT AUTO_INCREMENT NOT NULL,
-    name VARCHAR(255),
-    model VARCHAR(255),
-    on_create BOOLEAN NOT NULL,
-    PRIMARY KEY(id)
-) ENGINE=InnoDB;
-
-CREATE TABLE wkf_activity (
-    id BIGINT AUTO_INCREMENT NOT NULL,
-    workflow BIGINT,
-    subflow BIGINT,
-    split_mode VARCHAR(255),
-    join_mode VARCHAR(255),
-    kind VARCHAR(255) NOT NULL,
-    name VARCHAR(255),
-    signal_send VARCHAR(255),
-    flow_start BOOLEAN NOT NULL,
-    flow_stop BOOLEAN NOT NULL,
-    action TEXT,
-    PRIMARY KEY(id),
-    CONSTRAINT wkf_activity_workflow_fkey FOREIGN KEY (workflow) REFERENCES wkf (id) ON DELETE CASCADE,
-    CONSTRAINT wkf_activity_subflow_fkey FOREIGN KEY (subflow) REFERENCES wkf (id) ON DELETE SET NULL
-) ENGINE=InnoDB;
-
-CREATE TABLE wkf_transition (
-    id BIGINT AUTO_INCREMENT NOT NULL,
-    act_from BIGINT,
-    act_to BIGINT,
-    `condition` VARCHAR(255),
-    trigger_expr_id VARCHAR(255),
-    `signal` VARCHAR(255),
-    `group` BIGINT,
-    PRIMARY KEY(id),
-    CONSTRAINT wkf_transition_act_from_fkey FOREIGN KEY (act_from) REFERENCES wkf_activity (id) ON DELETE CASCADE,
-    CONSTRAINT wkf_transition_act_to_fkey FOREIGN KEY (act_to) REFERENCES wkf_activity (id) ON DELETE CASCADE,
-    CONSTRAINT wkf_transition_group_fkey FOREIGN KEY (`group`) REFERENCES res_group (id) ON DELETE SET NULL
-) ENGINE=InnoDB;
-
-CREATE TABLE wkf_instance (
-    id BIGINT AUTO_INCREMENT NOT NULL,
-    workflow BIGINT,
-    uid BIGINT DEFAULT 0,
-    res_id BIGINT NOT NULL DEFAULT 0,
-    res_type VARCHAR(255) NOT NULL,
-    state VARCHAR(255) NOT NULL,
-    PRIMARY KEY(id),
-    CONSTRAINT wkf_instance_workflow_fkey FOREIGN KEY (workflow) REFERENCES wkf (id) ON DELETE RESTRICT
-) ENGINE=InnoDB;
-
-CREATE TABLE wkf_workitem (
-    id BIGINT AUTO_INCREMENT NOT NULL,
-    activity BIGINT,
-    instance BIGINT,
-    subflow BIGINT,
-    state VARCHAR(255),
-    PRIMARY KEY(id),
-    CONSTRAINT wkf_workitem_activity_fkey FOREIGN KEY (activity) REFERENCES wkf_activity (id) ON DELETE CASCADE,
-    CONSTRAINT wkf_workitem_instance_fkey FOREIGN KEY (instance) REFERENCES wkf_instance (id) ON DELETE CASCADE,
-    CONSTRAINT wkf_workitem_subflow_fkey FOREIGN KEY (subflow) REFERENCES wkf_instance (id) ON DELETE CASCADE
-) ENGINE=InnoDB;
-
-CREATE TABLE wkf_witm_trans (
-    trans_id BIGINT,
-    inst_id BIGINT,
-    CONSTRAINT wkf_witm_trans_trans_id_fkey FOREIGN KEY (trans_id) REFERENCES wkf_transition (id) ON DELETE CASCADE,
-    CONSTRAINT wkf_witm_trans_inst_id_fkey FOREIGN KEY (inst_id) REFERENCES wkf_instance (id) ON DELETE CASCADE
+    `user` BIGINT NOT NULL,
+    `group` BIGINT NOT NULL,
+    CONSTRAINT `res_user-res_group_user_fkey` FOREIGN KEY (`user`) REFERENCES res_user (id) ON DELETE CASCADE,
+    CONSTRAINT `res_user-res_group_group_fkey` FOREIGN KEY (`group`) REFERENCES res_group (id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 CREATE TABLE ir_module_module (
@@ -166,13 +103,8 @@ CREATE TABLE ir_module_module (
     create_date TIMESTAMP NOT NULL,
     write_date TIMESTAMP NULL,
     write_uid BIGINT,
-    website VARCHAR(255),
     name VARCHAR(255) NOT NULL,
-    author VARCHAR(255),
-    url VARCHAR(255),
     state VARCHAR(255),
-    shortdesc VARCHAR(255),
-    description TEXT,
     PRIMARY KEY(id),
     CONSTRAINT ir_module_module_create_uid_fkey FOREIGN KEY (create_uid) REFERENCES res_user (id) ON DELETE SET NULL,
     CONSTRAINT ir_module_module_write_uid_fkey FOREIGN KEY (write_uid) REFERENCES res_user (id) ON DELETE SET NULL

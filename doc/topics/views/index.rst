@@ -4,15 +4,17 @@
 Views
 =====
 
-The views are used to display records of an object to the user.
+The views are used to display records of an :class:`ModelView
+<trytond.model.ModelView>` to the user.
 
-In Tryton, objects can have several views. An `action` opens a window and
-defines which view to show.
+In Tryton, :class:`ModelView <trytond.model.ModelView>` can have several views.
+An `action` opens a window and defines which view to show.
 
-The views are built from XML that is stored in the databases with the object
-ir.ui.view.
+The views are built from XML that is stored in the `view` directory of the
+module or in the databases thanks to the model ir.ui.view.
 
-So generally, they are defined in xml files with this kind of xml:
+So generally, they are defined in xml files with this kind of xml where name is
+the name of the XML file in the `view` directory:
 
 .. highlight:: xml
 
@@ -23,11 +25,7 @@ So generally, they are defined in xml files with this kind of xml:
       <field name="type">type name</field>
       <!--field name="inherit" ref="inherit_view_id"/-->
       <!--field name="field_childs">field name</field-->
-      <field name="arch" type="xml">
-          <![CDATA[
-          View XML ...
-          ]]>
-      </field>
+      <field name="name">view_name</field>
   </record>
 
 
@@ -69,23 +67,31 @@ List of attributes shared by many form elements:
 
     * ``id``: A unique identifier for the tag if there is no name attribute.
 
-    .. _common-attributes-expand:
+    .. _common-attributes-yexpand:
 
-    * ``expand``: A boolean to specify if the label should expand to take up
+    * ``yexpand``: A boolean to specify if the label should expand to take up
       any extra vertical space.
 
-    .. _common-attributes-fill:
+    .. _common-attributes-yfill:
 
-    * ``fill``: A boolean to specify if the label should fill the vertical
+    * ``yfill``: A boolean to specify if the label should fill the vertical
       space allocated to it in the table cell.
+
+    .. _common-attributes-yalign:
+
+    * ``yalign``: The vertical alignment, from 0.0 to 1.0.
 
     .. _common-attributes-xexpand:
 
-    * ``xexpand``: The same as expand but for horizontal space.
+    * ``xexpand``: The same as yexpand but for horizontal space.
 
     .. _common-attributes-xfill:
 
-    * ``xfill``: The same as fill but for horizontal space.
+    * ``xfill``: The same as yfill but for horizontal space.
+
+    .. _common-attributes-xalign:
+
+    * ``xalign``: The horizontal alignment, from 0.0 to 1.0.
 
     .. _common-attributes-colspan:
 
@@ -111,6 +117,29 @@ List of attributes shared by many form elements:
 
     * ``help``: The string that will be displayed when the cursor hovers over
       the widget.
+
+    .. _common-attributes-pre_validate:
+
+    * ``pre_validate``: A boolean only for fields
+      :class:`trytond.model.fields.One2Many` to specify if the client must
+      pre-validate the records using
+      :meth:`trytond.model.Model.pre_validate`.
+
+    .. _common-attributes-completion:
+
+    * ``completion``: A boolean only for fields
+      :class:`trytond.model.fields.Many2One`,
+      :class:`trytond.model.fields.Many2Many` and
+      :class:`trytond.model.fields.One2Many` to specifiy if the client must
+      auto-complete the field. The default value is True.
+
+    .. _common-attributes-factor:
+
+    * ``factor``: A factor to apply on fields
+      :class:`trytond.model.fields.Integer`,
+      :class:`trytond.model.fields.Float` and
+      :class:`trytond.model.fields.Numeric` to display on the widget. The
+      default value is 1.
 
 
 form
@@ -138,21 +167,22 @@ Display static string.
     * ``string``: The string that will be displayed in the label.
 
     * ``name``: The name of the field whose description will be used for
-      string.
-
-    * ``align``: The fraction of horizontal free space that must be put on the
-      left.  0.0 means no free space to the left.  1.0 means all free space to
-      the left.
+      string. Except if ``string`` is set, it will use this value and the value
+      of the field if ``string`` is empty.
 
     * ``id``: see common-attributes-id_.
 
-    * ``expand``: see in common-attributes-expand_.
+    * ``yexpand``: see in common-attributes-yexpand_.
 
-    * ``fill``: see in common-attributes-fill_.
+    * ``yfill``: see in common-attributes-yfill_.
+
+    * ``yalign``: see in common-attributes-yalign_.
 
     * ``xexpand``: see in common-attributes-xexpand_.
 
     * ``xfill``: see in common-attributes-xfill_.
+
+    * ``xalign``: see in common-attributes-xalign_.
 
     * ``colspan``: see in common-attributes-colspan_.
 
@@ -168,6 +198,8 @@ field
 Display a field of the object with the value of the current record.
 
     * ``name``: The name of the field.
+
+    * ``string``: The string that will be displayed for the widget.
 
     * ``widget``: The widget that must be used instead of the default one.
 
@@ -186,18 +218,21 @@ Display a field of the object with the value of the current record.
       specifies the order of the view used to display the relation. (Example:
       ``tree,form``)
 
+    * ``view_ids``: A comma separated list that specifies the view ids used to
+      display the relation.
+
     * ``completion``: Only for Many2One fields, it is a boolean to set the
       completion of the field.
 
     * ``invisible``: The field will not be displayed, but it will fill cells in
       the table.
 
-    * ``domain``: Only for One2Many, Many2One, Many2Many fields, it defines the
-      domain that must be used when searching for related records.
+    * ``filename_visible``: Only for Binary fields, boolean that enables the
+      display of the filename.
 
-    * ``expand``: see in common-attributes-expand_.
+    * ``yexpand``: see in common-attributes-yexpand_.
 
-    * ``fill``: see in common-attributes-fill_.
+    * ``yfill``: see in common-attributes-yfill_.
 
     * ``xexpand``: see in common-attributes-xexpand_.
 
@@ -207,6 +242,12 @@ Display a field of the object with the value of the current record.
 
     * ``help``: see in common-attributes-help_.
 
+    * ``pre_validate``: see in common-attributes-pre_validate_.
+
+    * ``completion``: see in common-attributes-completion_.
+
+    * ``factor``: see in common-attributes-factor_.
+
 image
 ^^^^^
 
@@ -215,9 +256,9 @@ Display an image.
     * ``name``: the name of the image. It must be the name with the extension
       of an image from ``tryton/share/pixmaps/``.
 
-    * ``expand``: see in common-attributes-expand_.
+    * ``yexpand``: see in common-attributes-yexpand_.
 
-    * ``fill``: see in common-attributes-fill_.
+    * ``yfill``: see in common-attributes-yfill_.
 
     * ``colspan``: see in common-attributes-colspan_.
 
@@ -238,9 +279,9 @@ Display a horizontal separator.
 
     * ``id``: see in common-attributes-id_.
 
-    * ``expand``: see in common-attributes-expand_.
+    * ``yexpand``: see in common-attributes-yexpand_.
 
-    * ``fill``: see in common-attributes-fill_.
+    * ``yfill``: see in common-attributes-yfill_.
 
     * ``colspan``: see in common-attributes-colspan_.
 
@@ -255,6 +296,9 @@ newline
 
 Force to use a new row.
 
+
+.. _form-button:
+
 button
 ^^^^^^
 
@@ -262,20 +306,24 @@ Display a button.
 
     * ``string``: The string that will be displayed inside the button.
 
-    * ``type``: It can be ``workflow``, ``object`` or ``action``. The default
-      is ``workflow``.  It defines which type of action must be run when
-      clicking on it.
+    * ``name``: The name of the function that will be called. The function must
+      have this syntax:
 
-    * ``name``: The name of the action:
+        ``button(cls, records)``
 
-        * ``workflow``: the name of the signal that will be sent.
+      The function may return an `ir.action` id or one of those client side
+      action keywords:
 
-        * ``object``: the name of the function that will called.  The function
-          must have this syntax:
+.. _topics-views-client-actions:
 
-          ``button(self, ids)``
-
-        * ``action``: the id of the ir.action that will be called.
+        * ``new``: to create a new record
+        * ``delete``: to delete the selected records
+        * ``remove``: to remove the record if it has a parent
+        * ``copy``: to copy the selected records
+        * ``next``: to go to the next record
+        * ``previous``: to go to the previous record
+        * ``close``: to close the current tab
+        * ``switch <view type>``: to switch the view to the defined type
 
     * ``icon``
 
@@ -293,9 +341,9 @@ notebook
 
 It adds a notebook widget which can contain page tags.
 
-    * ``tabpos``: It can be ``up``, ``down``, ``left``, ``right``.
-
     * ``colspan``: see in common-attributes-colspan_.
+
+    * ``states``: see in common-attributes-states_.
 
 page
 ^^^^
@@ -327,11 +375,13 @@ Create a sub-table in a cell.
 
     * ``col``: The number of columns for the group contains.
 
+    * ``homogeneous``: If True all the tables cells are the same size.
+
     * ``id``: see in common-attributes-id_.
 
-    * ``expand``: see in common-attributes-expand_.
+    * ``yexpand``: see in common-attributes-yexpand_.
 
-    * ``fill``: see in common-attributes-fill_.
+    * ``yfill``: see in common-attributes-yfill_.
 
     * ``colspan``: see in common-attributes-colspan_.
 
@@ -373,8 +423,8 @@ Example
       <field name="active" xexpand="0" width="100"/>
       <notebook colspan="6">
           <page string="General">
-              <field name="addresses" mode="form,tree" colspan="4" height="200">
-              </field>
+              <field name="addresses" mode="form,tree" colspan="4"
+                  view_ids="party.address_view_form,party.address_view_tree_sequence"/>
               <label name="type"/>
               <field name="type" widget="selection"/>
               <label name="lang"/>
@@ -436,9 +486,6 @@ Each tree view must start with this tag.
     * ``colors``: A PySON string that will be evaluated for each record. A
       string containing the name of the color will be returned.
 
-    * ``fill``: A boolean to specify if the last column must fill the remaining
-      free space in the view.
-
     * ``keyword_open``: A boolean to specify if the client should look for a
       tree_open action on double click instead of switching view.
 
@@ -453,11 +500,6 @@ field
 
     * ``widget``: The widget that must be used instead of the default one.
 
-    * ``select``: A number between 0 and 2. If set to 1, the field will be used
-      as main search criteria; if set to 2, the field will be used as second
-      search criteria; if set to 0, the field will not be used as search
-      criteria.
-
     * ``tree_invisible``: Boolean to display or not the column.
 
     * ``icon``: The name of the field that contains the name of the icon to
@@ -468,6 +510,35 @@ field
 
     * ``width``: Set the width of the column.
 
+    * ``expand``: Boolean to specify if the column should be expanded to take
+      available extra space in the view. This space is shared equally among all
+      columns that have their "expand" property set to True. Resize don't work
+      if this option is enabled.
+
+    * ``pre_validate``: see in common-attributes-pre_validate_.
+
+    * ``completion``: see in common-attributes-completion_.
+
+    * ``factor``: see in common-attributes-factor_.
+
+prefix or suffix
+^^^^^^^^^^^^^^^^
+
+A ``field`` could contain one or many ``prefix`` or ``suffix`` that will be
+diplayed in the same column.
+
+    * ``string``: The text that will be displayed.
+
+    * ``name``: The name of the field whose value will be displayed.
+
+    * ``icon``: The name of the field that contains the name of the icon to
+      display or the name of the icon.
+
+button
+^^^^^^
+
+Same as in form-button_.
+
 Example
 -------
 
@@ -476,13 +547,32 @@ Example
 ::
 
   <tree string="Taxes" sequence="sequence">
-      <field name="name" select="1"/>
-      <field name="group" select="1"/>
-      <field name="type" select="1"/>
-      <field name="active" select="2"/>
+      <field name="name"/>
+      <field name="percentage">
+          <suffix string="%"/>
+      </field>
+      <field name="group"/>
+      <field name="type"/>
+      <field name="active"/>
       <field name="sequence" tree_invisible="1"/>
   </tree>
 
+button
+^^^^^^
+
+Display a button.
+
+    * ``string``: The string that will be displayed inside the button.
+
+    * ``name``: The name of the function that will be called. The function must
+      have this syntax:
+
+        ``button(cls, records)``
+
+    * ``confirm``: A text that will be displayed in a confirmation popup when
+      the button is clicked.
+
+    * ``help``: see in common-attributes-help_
 
 Graph view
 ==========
@@ -536,6 +626,24 @@ field
     * ``empty``: defined if the line graph must put a point for missing
       dates.
 
+    * ``color``: the color of the field.
+
+    * ``interpolation``: defined how the line graph must interpolate points.
+      The default is ``linear``.
+
+        * ``constant-center``: use the value of the nearest point, see
+          `Nearest-neighbor interpolation`_
+
+        * ``constant-left``: use the value of the nearest left point.
+
+        * ``constant-right``: use the value of the nearest right point.
+
+        * ``linear``: see `linear interpolation`_
+
+.. _`Nearest-neighbor interpolation`:
+    http://en.wikipedia.org/wiki/Nearest-neighbor_interpolation
+.. _`linear interpolation`: http://en.wikipedia.org/wiki/Linear_interpolation
+
 
 Example
 -------
@@ -552,3 +660,126 @@ Example
         <field name="total_amount"/>
     </y>
   </graph>
+
+
+Board view
+==========
+
+The RNG that describes the xml for a board view is stored in
+trytond/ir/ui/board.rng.  There is also a RNC in trytond/ir/ui/graph.rnc.
+
+Board view is used to display multiple views at once.
+
+Elements are put on the screen followin the same rules as for ``Form`` view.
+
+The views can be updated by the selection of records on an other view inside
+the same board by using :class:`~trytond.pyson.Eval()` on the action id of the
+other view in the domain.
+
+
+XML description
+---------------
+
+board
+^^^^^
+
+Each board view must start with this tag.
+
+    * ``string``: The text that will be used as default titla for the atb or
+      the window.
+
+    * ``col``: The number of columns for the view.
+
+image
+^^^^^
+
+Same as in ``Form`` view.
+
+separator
+^^^^^^^^^
+
+Same as in ``Form`` view.
+
+label
+^^^^^
+
+Same as in ``Form`` view.
+
+newline
+^^^^^^^
+
+Same as in ``Form`` view.
+
+notebook
+^^^^^^^^
+
+Same as in ``Form`` view.
+
+page
+^^^^
+
+Same as in ``Form`` view.
+
+group
+^^^^^
+
+Same as in ``Form`` view.
+
+hpaned, vpaned
+^^^^^^^^^^^^^^
+
+Same as in ``Form`` view.
+
+child
+^^^^^
+
+Same as in ``Form`` view.
+
+action
+^^^^^^
+
+    * ``name``: The id of the action window.
+
+    * ``colspan``: see in common-attributes-colspan_.
+
+Calendar view
+=============
+
+The RNG that describes the xml for a calendar view is stored in
+trytond/ir/ui/calendar.rng. There is also a RNC in trytond/ir/ui/calendar.rnc.
+
+Calendar view is use to display records as events on a calendar based on a
+`dtstart` and optionally a `dtend`.
+
+XML description
+---------------
+
+calendar
+^^^^^^^^
+
+Each calendar view must start with this tag.
+
+    * ``dtstart``: The name of the field that contains the start date.
+
+    * ``dtend``: The name of the field that contains the end date.
+
+    * ``string``: The text that will be used as default title for the tab or
+      the window.
+
+field
+^^^^^
+
+    * ``name``: The name of the field.
+
+Example
+-------
+
+.. highlight:: xml
+
+::
+
+  <calendar string="Productions" dtstart="planned_date">
+      <field name="code"/>
+      <field name="product"/>
+      <field name="reference"/>
+  </calendar>

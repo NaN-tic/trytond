@@ -1,8 +1,10 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
+from types import NoneType
 
+from trytond.model.fields.field import Field
 from trytond.model.fields.many2many import Many2Many
-from trytond.transaction import Transaction
+from trytond.pool import Pool
 
 
 class One2One(Many2Many):
@@ -26,23 +28,37 @@ class One2One(Many2Many):
             res[i] = vals[0] if vals else False
         return res
 
-    def set(self, ids, model, name, value):
+    def set(self, Model, name, ids, value, *args):
         '''
         Set the values.
-
-        :param ids: A list of ids
-        :param model: A string with the name of the model
-        :param name: A string with the name of the field
-        :param value: The id to link
         '''
-        relation_obj = model.pool.get(self.relation_name)
-        relation_ids = relation_obj.search([
-            (self.origin, 'in', ids),
-            ])
-        relation_obj.delete(relation_ids)
-        if value:
-            for record_id in ids:
-                relation_obj.create({
-                    self.origin: record_id,
-                    self.target: value,
-                    })
+        pool = Pool()
+        Relation = pool.get(self.relation_name)
+        to_delete = []
+        to_create = []
+        args = iter((ids, value) + args)
+        for ids, value in zip(args, args):
+            relations = Relation.search([
+                    (self.origin, 'in', ids),
+                    ])
+            to_delete.extend(relations)
+            if value:
+                to_create = []
+                for record_id in ids:
+                    to_create.append({
+                            self.origin: record_id,
+                            self.target: value,
+                            })
+        if to_delete:
+            Relation.delete(to_delete)
+        if to_create:
+            Relation.create(to_create)
+
+    def __set__(self, inst, value):
+        Target = self.get_target()
+        if isinstance(value, dict):
+            value = Target(*value)
+        elif isinstance(value, (int, long)):
+            value = Target(value)
+        assert isinstance(value, (Target, NoneType))
+        Field.__set__(self, inst, value)

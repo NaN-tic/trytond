@@ -1,18 +1,20 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from __future__ import with_statement
 import os
-try:
-    import hashlib
-except ImportError:
-    hashlib = None
-    import md5
-import base64
-from trytond.model import ModelView, ModelSQL, fields
-from trytond.config import CONFIG
-from trytond.backend import TableHandler
-from trytond.transaction import Transaction
-from trytond.pyson import Not, Equal, Eval
+import hashlib
+from sql.operators import Concat
+
+from ..model import ModelView, ModelSQL, fields
+from ..config import CONFIG
+from .. import backend
+from ..transaction import Transaction
+from ..pyson import Eval
+from ..pool import Pool
+
+__all__ = [
+    'Attachment',
+    ]
+
 
 def firstline(description):
     try:
@@ -23,115 +25,125 @@ def firstline(description):
 
 class Attachment(ModelSQL, ModelView):
     "Attachment"
-    _name = 'ir.attachment'
-    _description = __doc__
+    __name__ = 'ir.attachment'
     name = fields.Char('Name', required=True)
     type = fields.Selection([
         ('data', 'Data'),
         ('link', 'Link'),
         ], 'Type', required=True)
     data = fields.Function(fields.Binary('Data', filename='name', states={
-        'invisible': Not(Equal(Eval('type'), 'data')),
-        }, depends=['type']), 'get_data', setter='set_data')
+                'invisible': Eval('type') != 'data',
+                }, depends=['type']), 'get_data', setter='set_data')
     description = fields.Text('Description')
-    summary = fields.Function(fields.Char('Summary',
-        on_change_with=['description']), 'get_summary')
-    resource = fields.Reference('Resource', selection='models_get', select=1)
+    summary = fields.Function(fields.Char('Summary'), 'on_change_with_summary')
+    resource = fields.Reference('Resource', selection='models_get',
+        select=True)
     link = fields.Char('Link', states={
-        'invisible': Not(Equal(Eval('type'), 'link')),
-        }, depends=['type'])
+            'invisible': Eval('type') != 'link',
+            }, depends=['type'])
     digest = fields.Char('Digest', size=32)
     collision = fields.Integer('Collision')
     data_size = fields.Function(fields.Integer('Data size', states={
-        'invisible': Not(Equal(Eval('type'), 'data')),
-        }, depends=['type']), 'get_data')
+                'invisible': Eval('type') != 'data',
+                }, depends=['type']), 'get_data')
     last_modification = fields.Function(fields.DateTime('Last Modification'),
-            'get_last_modification')
+        'get_last_modification')
     last_user = fields.Function(fields.Char('Last User'),
         'get_last_user')
 
-    def __init__(self):
-        super(Attachment, self).__init__()
-        self._sql_constraints += [
+    @classmethod
+    def __setup__(cls):
+        super(Attachment, cls).__setup__()
+        cls._sql_constraints += [
             ('resource_name', 'UNIQUE(resource, name)',
                 'The  names of attachments must be unique by resource!'),
         ]
 
-    def init(self, module_name):
+    @classmethod
+    def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
 
-        super(Attachment, self).init(module_name)
+        super(Attachment, cls).__register__(module_name)
 
-        table = TableHandler(cursor, self, module_name)
+        table = TableHandler(cursor, cls, module_name)
+        attachment = cls.__table__()
 
         # Migration from 1.4 res_model and res_id merged into resource
         # Reference
         if table.column_exist('res_model') and \
                 table.column_exist('res_id'):
             table.drop_constraint('res_model_res_id_name')
-            cursor.execute('UPDATE "%s" '
-            'SET "resource" = "res_model"||\',\'||"res_id"' % self._table)
+            cursor.execute(*attachment.update(
+                    [attachment.resource],
+                    [Concat(Concat(attachment.resource, ','),
+                            attachment.res_id)]))
             table.drop_column('res_model')
             table.drop_column('res_id')
 
-    def default_type(self):
+    @staticmethod
+    def default_type():
         return 'data'
 
-    def default_resource(self):
+    @staticmethod
+    def default_resource():
         return Transaction().context.get('resource')
 
-    def default_collision(self):
+    @staticmethod
+    def default_collision():
         return 0
 
-    def models_get(self):
-        model_obj = self.pool.get('ir.model')
-        model_ids = model_obj.search([])
+    @staticmethod
+    def models_get():
+        pool = Pool()
+        Model = pool.get('ir.model')
+        ModelAccess = pool.get('ir.model.access')
+        models = Model.search([])
+        access = ModelAccess.get_access([m.model for m in models])
         res = []
-        for model in model_obj.browse(model_ids):
-            res.append([model.model, model.name])
+        for model in models:
+            if access[model.model]['read']:
+                res.append([model.model, model.name])
         return res
 
-    def get_data(self, ids, name):
-        res = {}
+    def get_data(self, name):
         db_name = Transaction().cursor.dbname
-        for attachment in self.browse(ids):
-            value = False
-            if name == 'data_size':
-                value = 0
-            if attachment.digest:
-                filename = attachment.digest
-                if attachment.collision:
-                    filename = filename + '-' + str(attachment.collision)
-                filename = os.path.join(CONFIG['data_path'], db_name,
-                        filename[0:2], filename[2:4], filename)
-                if name == 'data_size':
-                    try:
-                        statinfo = os.stat(filename)
-                        value = statinfo.st_size
-                    except OSError:
-                        pass
-                else:
-                    try:
-                        with open(filename, 'rb') as file_p:
-                            value = base64.encodestring(file_p.read())
-                    except IOError:
-                        pass
-            res[attachment.id] = value
-        return res
+        format_ = Transaction().context.pop('%s.%s'
+            % (self.__name__, name), '')
+        value = None
+        if name == 'data_size' or format_ == 'size':
+            value = 0
+        if self.digest:
+            filename = self.digest
+            if self.collision:
+                filename = filename + '-' + str(self.collision)
+            filename = os.path.join(CONFIG['data_path'], db_name,
+                    filename[0:2], filename[2:4], filename)
+            if name == 'data_size' or format_ == 'size':
+                try:
+                    statinfo = os.stat(filename)
+                    value = statinfo.st_size
+                except OSError:
+                    pass
+            else:
+                try:
+                    with open(filename, 'rb') as file_p:
+                        value = buffer(file_p.read())
+                except IOError:
+                    pass
+        return value
 
-    def set_data(self, ids, name, value):
-        if value is False or value is None:
+    @classmethod
+    def set_data(cls, attachments, name, value):
+        if value is None:
             return
         cursor = Transaction().cursor
+        table = cls.__table__()
         db_name = cursor.dbname
         directory = os.path.join(CONFIG['data_path'], db_name)
         if not os.path.isdir(directory):
             os.makedirs(directory, 0770)
-        data = base64.decodestring(value)
-        if hashlib:
-            digest = hashlib.md5(data).hexdigest()
-        else:
-            digest = md5.new(data).hexdigest()
+        digest = hashlib.md5(value).hexdigest()
         directory = os.path.join(directory, digest[0:2], digest[2:4])
         if not os.path.isdir(directory):
             os.makedirs(directory, 0770)
@@ -139,12 +151,13 @@ class Attachment(ModelSQL, ModelView):
         collision = 0
         if os.path.isfile(filename):
             with open(filename, 'rb') as file_p:
-                data2 = file_p.read()
-            if data != data2:
-                cursor.execute('SELECT DISTINCT(collision) FROM ir_attachment ' \
-                        'WHERE digest = %s ' \
-                            'AND collision != 0 ' \
-                        'ORDER BY collision', (digest,))
+                data = file_p.read()
+            if value != data:
+                cursor.execute(*table.select(table.collision,
+                        where=(table.digest == digest)
+                        & (table.collision != 0),
+                        group_by=table.collision,
+                        order_by=table.collision))
                 collision2 = 0
                 for row in cursor.fetchall():
                     collision2 = row[0]
@@ -152,8 +165,8 @@ class Attachment(ModelSQL, ModelView):
                             digest + '-' + str(collision2))
                     if os.path.isfile(filename):
                         with open(filename, 'rb') as file_p:
-                            data2 = file_p.read()
-                        if data == data2:
+                            data = file_p.read()
+                        if value == data:
                             collision = collision2
                             break
                 if collision == 0:
@@ -161,80 +174,82 @@ class Attachment(ModelSQL, ModelView):
                     filename = os.path.join(directory,
                             digest + '-' + str(collision))
                     with open(filename, 'wb') as file_p:
-                        file_p.write(data)
+                        file_p.write(value)
         else:
             with open(filename, 'wb') as file_p:
-                file_p.write(data)
-        self.write(ids, {
+                file_p.write(value)
+        cls.write(attachments, {
             'digest': digest,
             'collision': collision,
             })
 
-    def get_summary(self, ids, name):
-        return dict((x.id, firstline(x.description or ''))
-            for x in self.browse(ids))
+    @fields.depends('description')
+    def on_change_with_summary(self, name=None):
+        return firstline(self.description or '')
 
-    def on_change_with_summary(self, values):
-        return firstline(values.get('description') or '')
+    def get_last_modification(self, name):
+        return (self.write_date if self.write_date else self.create_date
+            ).replace(microsecond=0)
 
-    def get_last_modification(self, ids, name):
-        return dict((x.id, (x.write_date if x.write_date else x.create_date
-            ).replace(microsecond=0))
-            for x in self.browse(ids))
-
-    def get_last_user(self, ids, name):
+    @classmethod
+    def get_last_user(cls, attachments, name):
         with Transaction().set_user(0):
-            return dict( (x.id, x.write_uid.rec_name if x.write_uid
-                else x.create_uid.rec_name) for x in self.browse(ids))
+            return dict(
+                (x.id, x.write_uid.rec_name
+                    if x.write_uid else x.create_uid.rec_name)
+                for x in cls.browse(attachments))
 
-
-    def check_access(self, ids, mode='read'):
-        model_access_obj = self.pool.get('ir.model.access')
+    @classmethod
+    def check_access(cls, ids, mode='read'):
+        pool = Pool()
+        ModelAccess = pool.get('ir.model.access')
         if Transaction().user == 0:
             return
-        if not ids:
-            return
-        if isinstance(ids, (int, long)):
-            ids = [ids]
         model_names = set()
         with Transaction().set_user(0):
-            for attachment in self.browse(ids):
+            for attachment in cls.browse(ids):
                 if attachment.resource:
-                    model_names.add(attachment.resource.split(',')[0])
+                    model_names.add(attachment.resource.__name__)
         for model_name in model_names:
-            model_access_obj.check(model_name, mode=mode)
+            ModelAccess.check(model_name, mode=mode)
 
-    def read(self, ids, fields_names=None):
-        self.check_access(ids, mode='read')
-        return super(Attachment, self).read(ids, fields_names=fields_names)
+    @classmethod
+    def read(cls, ids, fields_names=None):
+        cls.check_access(ids, mode='read')
+        return super(Attachment, cls).read(ids, fields_names=fields_names)
 
-    def delete(self, ids):
-        self.check_access(ids, mode='delete')
-        return super(Attachment, self).delete(ids)
+    @classmethod
+    def delete(cls, attachments):
+        cls.check_access([a.id for a in attachments], mode='delete')
+        super(Attachment, cls).delete(attachments)
 
-    def write(self, ids, vals):
-        self.check_access(ids, mode='write')
-        res = super(Attachment, self).write(ids, vals)
-        self.check_access(ids, mode='write')
-        return res
+    @classmethod
+    def write(cls, attachments, values, *args):
+        all_attachments = []
+        actions = iter((attachments, values) + args)
+        for records, _ in zip(actions, actions):
+            all_attachments += records
+        cls.check_access([a.id for a in all_attachments], mode='write')
+        super(Attachment, cls).write(attachments, values, *args)
+        cls.check_access(all_attachments, mode='write')
 
-    def create(self, vals):
-        res = super(Attachment, self).create(vals)
-        self.check_access(res, mode='create')
-        return res
+    @classmethod
+    def create(cls, vlist):
+        attachments = super(Attachment, cls).create(vlist)
+        cls.check_access([a.id for a in attachments], mode='create')
+        return attachments
 
-    def view_header_get(self, value, view_type='form'):
-        ir_model_obj = self.pool.get('ir.model')
-        value = super(Attachment, self).view_header_get(value,
+    @classmethod
+    def view_header_get(cls, value, view_type='form'):
+        pool = Pool()
+        Model = pool.get('ir.model')
+        value = super(Attachment, cls).view_header_get(value,
                 view_type=view_type)
         resource = Transaction().context.get('resource')
         if resource:
             model_name, record_id = resource.split(',', 1)
-            ir_model_id, = ir_model_obj.search([('model', '=', model_name)])
-            ir_model = ir_model_obj.browse(ir_model_id)
-            model_obj = self.pool.get(model_name)
-            record = model_obj.browse(int(record_id))
+            ir_model, = Model.search([('model', '=', model_name)])
+            Resource = pool.get(model_name)
+            record = Resource(int(record_id))
             value = '%s - %s - %s' % (ir_model.name, record.rec_name, value)
         return value
-
-Attachment()

@@ -1,22 +1,53 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import ConfigParser, optparse, os, sys
-from trytond.version import VERSION
+import sys
+try:
+    import cdecimal
+    # Use cdecimal globally
+    if 'decimal' not in sys.modules:
+        sys.modules['decimal'] = cdecimal
+except ImportError:
+    import decimal
+    sys.modules['cdecimal'] = decimal
+import os
+import ConfigParser
+import getpass
+import socket
+
+
+def get_hostname(netloc):
+    if '[' in netloc and ']' in netloc:
+        return netloc.split(']')[0][1:]
+    elif ':' in netloc:
+        return netloc.split(':')[0]
+    else:
+        return netloc
+
+
+def get_port(netloc, protocol):
+    netloc = netloc.split(']')[-1]
+    if ':' in netloc:
+        return int(netloc.split(':')[1])
+    else:
+        return {
+            'jsonrpc': 8000,
+            'xmlrpc': 8069,
+            'webdav': 8080,
+        }.get(protocol)
 
 
 class ConfigManager(object):
     def __init__(self, fname=None):
         self.options = {
-            'interface': '',
-            'netrpc': True,
-            'netport': 8070,
-            'xmlrpc': False,
-            'xmlport': 8069,
-            'jsonrpc': False,
-            'jsonport': 8000,
+            'jsonrpc': [('localhost', 8000)],
+            'ssl_jsonrpc': False,
+            'hostname_jsonrpc': None,
+            'xmlrpc': [],
+            'ssl_xmlrpc': False,
             'jsondata_path': '/var/www/localhost/tryton',
-            'webdav': False,
-            'webdavport': 8080,
+            'webdav': [],
+            'ssl_webdav': False,
+            'hostname_webdav': None,
             'db_type': 'postgresql',
             'db_host': False,
             'db_port': False,
@@ -31,10 +62,6 @@ class ConfigManager(object):
             'debug_mode': False,
             'pidfile': None,
             'logfile': None,
-            'secure_netrpc': False,
-            'secure_xmlrpc': False,
-            'secure_jsonrpc': False,
-            'secure_webdav': False,
             'privatekey': '/etc/ssl/trytond/server.key',
             'certificate': '/etc/ssl/trytond/server.pem',
             'smtp_server': 'localhost',
@@ -43,57 +70,27 @@ class ConfigManager(object):
             'smtp_tls': False,
             'smtp_user': False,
             'smtp_password': False,
+            'smtp_default_from_email': '%s@%s' % (
+                getpass.getuser(), socket.getfqdn()),
             'data_path': '/var/lib/trytond',
-            'max_thread': 40,
             'multi_server': False,
             'session_timeout': 600,
-            'psyco': False,
             'auto_reload': True,
             'prevent_dblist': False,
             'init': {},
             'update': {},
+            'cron': True,
+            'unoconv': 'pipe,name=trytond;urp;StarOffice.ComponentContext',
+            'retry': 5,
+            'language': 'en_US',
         }
         self.configfile = None
 
-    def parse(self):
-        parser = optparse.OptionParser(version=VERSION)
+    def update_cmdline(self, cmdline_options):
+        self.options.update(cmdline_options)
 
-        parser.add_option("-c", "--config", dest="config",
-                help="specify config file")
-        parser.add_option('--debug', dest='debug_mode', action='store_true',
-                help='enable debug mode (start post-mortem debugger if exceptions occur)')
-        parser.add_option("-v", "--verbose", action="store_true",
-                dest="verbose", help="enable verbose mode")
-
-        parser.add_option("-d", "--database", dest="db_name",
-                help="specify the database name")
-        parser.add_option("-i", "--init", dest="init",
-                help="init a module (use \"all\" for all modules)")
-        parser.add_option("-u", "--update", dest="update",
-                help="update a module (use \"all\" for all modules)")
-
-        parser.add_option("--pidfile", dest="pidfile",
-                help="file where the server pid will be stored")
-        parser.add_option("--logfile", dest="logfile",
-                help="file where the server log will be stored")
-
-        (opt, _) = parser.parse_args()
-
-        if opt.config:
-            self.configfile = opt.config
-        else:
-            prefixdir = os.path.abspath(os.path.normpath(os.path.join(
-                os.path.dirname(sys.prefix), '..')))
-            self.configfile = os.path.join(prefixdir, 'etc', 'trytond.conf')
-            if not os.path.isfile(self.configfile):
-                configdir = os.path.abspath(os.path.normpath(os.path.join(
-                    os.path.dirname(__file__), '..')))
-                self.configfile = os.path.join(configdir, 'etc', 'trytond.conf')
-            if not os.path.isfile(self.configfile):
-                self.configfile = None
-        self.load()
-
-        # Verify that we want to log or not, if not the output will go to stdout
+        # Verify that we want to log or not,
+        # if not the output will go to stdout
         if self.options['logfile'] in ('None', 'False'):
             self.options['logfile'] = False
         # the same for the pidfile
@@ -102,51 +99,35 @@ class ConfigManager(object):
         if self.options['data_path'] in ('None', 'False'):
             self.options['data_path'] = False
 
-        for arg in (
-                'verbose',
-                'debug_mode',
-                'pidfile',
-                'logfile',
-                ):
-            if getattr(opt, arg) is not None:
-                self.options[arg] = getattr(opt, arg)
+    def update_etc(self, configfile=None):
+        if configfile is None:
+            configfile = os.environ.get('TRYTOND_CONFIG')
+            if not configfile:
+                prefixdir = os.path.abspath(os.path.normpath(os.path.join(
+                    os.path.dirname(sys.prefix), '..')))
+                configfile = os.path.join(prefixdir, 'etc', 'trytond.conf')
+                if not os.path.isfile(configfile):
+                    configdir = os.path.abspath(os.path.normpath(os.path.join(
+                        os.path.dirname(__file__), '..')))
+                    configfile = os.path.join(configdir, 'etc', 'trytond.conf')
+                if not os.path.isfile(configfile):
+                    configfile = None
 
-        db_name = []
-        if opt.db_name:
-            for i in opt.db_name.split(','):
-                db_name.append(i)
-        self.options['db_name'] = db_name
-
-        init = {}
-        if opt.init:
-            for i in opt.init.split(','):
-                if i != 'test':
-                    init[i] = 1
-        self.options['init'] = init
-
-        update = {}
-        if opt.update:
-            for i in opt.update.split(','):
-                if i != 'test':
-                    update[i] = 1
-        self.options['update'] = update
-
-    def load(self):
-        parser = ConfigParser.ConfigParser()
+        self.configfile = configfile
         if not self.configfile:
             return
-        fp = open(self.configfile)
-        try:
+
+        parser = ConfigParser.ConfigParser()
+        with open(self.configfile) as fp:
             parser.readfp(fp)
-        finally:
-            fp.close()
         for (name, value) in parser.items('options'):
             if value == 'True' or value == 'true':
                 value = True
             if value == 'False' or value == 'false':
                 value = False
-            if name in ('netport', 'xmlport', 'webdavport', 'jsonport'):
-                value = int(value)
+            if name in ('xmlrpc', 'jsonrpc', 'webdav') and value:
+                value = [(get_hostname(netloc).replace('*', ''),
+                    get_port(netloc, name)) for netloc in value.split(',')]
             self.options[name] = value
 
     def get(self, key, default=None):

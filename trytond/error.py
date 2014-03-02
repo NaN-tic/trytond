@@ -1,11 +1,18 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 from trytond.transaction import Transaction
+from trytond.pool import Pool
+from trytond.exceptions import UserError, UserWarning
 
 
 class WarningErrorMixin(object):
 
-    def raise_user_error(self, error, error_args=None,
+    @classmethod
+    def _get_error_messages(cls):
+        return cls._error_messages.values()
+
+    @classmethod
+    def raise_user_error(cls, error, error_args=None,
             error_description='', error_description_args=None,
             raise_exception=True):
         '''
@@ -24,17 +31,14 @@ class WarningErrorMixin(object):
             (or tuple if error_description is not empty) instead of raising an
             exception.
         '''
-        translation_obj = self.pool.get('ir.translation')
+        Translation = Pool().get('ir.translation')
 
-        error = self._error_messages.get(error, error)
+        error = cls._error_messages.get(error, error)
 
-        language = Transaction().context.get('language') or 'en_US'
-        res = translation_obj._get_source(self._name, 'error', language, error)
+        language = Transaction().language
+        res = Translation.get_source(cls.__name__, 'error', language, error)
         if not res:
-            res = translation_obj._get_source(error, 'error', language)
-        if not res:
-            res = translation_obj._get_source(error, 'error', 'en_US')
-
+            res = Translation.get_source(error, 'error', language)
         if res:
             error = res
 
@@ -45,37 +49,34 @@ class WarningErrorMixin(object):
                 pass
 
         if error_description:
-            error_description = self._error_messages.get(error_description,
+            error_description = cls._error_messages.get(error_description,
                     error_description)
 
-            res = translation_obj._get_source(self._name, 'error', language,
-                    error_description)
+            res = Translation.get_source(cls.__name__, 'error', language,
+                error_description)
             if not res:
-                res = translation_obj._get_source(error_description, 'error',
-                        language)
-            if not res:
-                res = translation_obj._get_source(error_description, 'error',
-                        'en_US')
-
+                res = Translation.get_source(error_description, 'error',
+                    language)
             if res:
                 error_description = res
 
             if error_description_args:
                 try:
-                    error_description = error_description % \
-                            error_description_args
+                    error_description = (error_description
+                        % error_description_args)
                 except TypeError:
                     pass
             if raise_exception:
-                raise Exception('UserError', error, error_description)
+                raise UserError(error, error_description)
             else:
                 return (error, error_description)
         if raise_exception:
-            raise Exception('UserError', error)
+            raise UserError(error)
         else:
             return error
 
-    def raise_user_warning(self, warning_name, warning,
+    @classmethod
+    def raise_user_warning(cls, warning_name, warning,
             warning_args=None, warning_description='',
             warning_description_args=None):
         '''
@@ -92,17 +93,16 @@ class WarningErrorMixin(object):
         :param warning_description_args: the arguments that will be used
             for "%"-based substitution
         '''
-        warning_obj = self.pool.get('res.user.warning')
-        if warning_obj.check(warning_name):
+        Warning_ = Pool().get('res.user.warning')
+        if Warning_.check(warning_name):
             if warning_description:
-                warning, warning_description = self.raise_user_error(warning,
+                warning, warning_description = cls.raise_user_error(warning,
                         error_args=warning_args,
                         error_description=warning_description,
                         error_description_args=warning_description_args,
                         raise_exception=False)
-                raise Exception('UserWarning', warning_name, warning,
-                        warning_description)
+                raise UserWarning(warning_name, warning, warning_description)
             else:
-                warning = self.raise_user_error(warning,
+                warning = cls.raise_user_error(warning,
                         error_args=warning_args, raise_exception=False)
-                raise Exception('UserWarning', warning_name, warning)
+                raise UserWarning(warning_name, warning)

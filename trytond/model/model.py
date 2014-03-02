@@ -2,510 +2,268 @@
 #this repository contains the full copyright notices and license terms.
 
 import copy
+import collections
+import warnings
+
 from trytond.model import fields
 from trytond.error import WarningErrorMixin
-from trytond.pool import Pool
+from trytond.pool import Pool, PoolBase
 from trytond.pyson import PYSONEncoder
 from trytond.transaction import Transaction
+from trytond.url import URLMixin
+from trytond.rpc import RPC
+
+__all__ = ['Model']
 
 
-class Model(WarningErrorMixin):
+class Model(WarningErrorMixin, URLMixin, PoolBase):
     """
     Define a model in Tryton.
     """
-    _name = None
-    _inherits = {}
-    _description = ''
-    pool = None #XXX change to avoid collision with field
-    __columns = None
-    __xxx2many_targets = None
-    __defaults = None
     _rec_name = 'name'
 
     id = fields.Integer('ID', readonly=True)
 
-    def _reset_columns(self):
-        self.__columns = None
-        self.__defaults = None
-        self._reset_xxx2many_targets()
+    @classmethod
+    def __setup__(cls):
+        super(Model, cls).__setup__()
+        cls.__rpc__ = {
+            'default_get': RPC(),
+            'fields_get': RPC(),
+            'on_change_with': RPC(instantiate=0),
+            'pre_validate': RPC(instantiate=0),
+            }
+        cls._error_messages = {}
 
-    def _getcolumns(self):
-        if self.__columns:
-            return self.__columns
-        res = {}
-        for attr in dir(self):
+        if hasattr(cls, '__depend_methods'):
+            cls.__depend_methods = cls.__depend_methods.copy()
+        else:
+            cls.__depend_methods = collections.defaultdict(set)
+
+        # Copy fields and update depends
+        for attr in dir(cls):
             if attr.startswith('_'):
                 continue
-            if isinstance(getattr(self, attr), fields.Field):
-                res[attr] = getattr(self, attr)
-        self.__columns = res
-        return res
+            if not isinstance(getattr(cls, attr), fields.Field):
+                continue
+            field_name = attr
+            field = copy.deepcopy(getattr(cls, field_name))
+            setattr(cls, field_name, field)
 
-    #replace by _fields
-    _columns = property(fget=_getcolumns)
+            for attribute in ('on_change', 'on_change_with', 'autocomplete',
+                    'selection_change_with'):
+                if attribute == 'selection_change_with':
+                    if isinstance(
+                            getattr(field, 'selection', None), basestring):
+                        function_name = field.selection
+                    else:
+                        continue
+                else:
+                    function_name = '%s_%s' % (attribute, field_name)
+                function = getattr(cls, function_name, None)
+                if function:
+                    if getattr(function, 'depends', None):
+                        setattr(field, attribute,
+                            getattr(field, attribute) | function.depends)
+                    if getattr(function, 'depend_methods', None):
+                        cls.__depend_methods[(field_name, attribute)] |= \
+                            function.depend_methods
 
-    def _reset_defaults(self):
-        self.__defaults = None
+    @classmethod
+    def __post_setup__(cls):
+        super(Model, cls).__post_setup__()
 
-    def _getdefaults(self):
-        if self.__defaults:
-            return self.__defaults
-        res = {}
-        fields_names = self._columns.keys()
-        fields_names += self._inherit_fields.keys()
+        # Set _fields
+        cls._fields = {}
+        for attr in dir(cls):
+            if attr.startswith('_'):
+                continue
+            if isinstance(getattr(cls, attr), fields.Field):
+                cls._fields[attr] = getattr(cls, attr)
+
+        # Set _defaults
+        cls._defaults = {}
+        fields_names = cls._fields.keys()
         for field_name in fields_names:
-            default_method = getattr(self, 'default_%s' % field_name, False)
-            if callable(default_method):
-                res[field_name] = default_method
-        self.__defaults = res
-        return res
+            default_method = getattr(cls, 'default_%s' % field_name, False)
+            if isinstance(default_method, collections.Callable):
+                cls._defaults[field_name] = default_method
 
-    _defaults = property(fget=_getdefaults)
+        for k in cls._defaults:
+            assert k in cls._fields, \
+                'Default function defined in %s but field %s does not exist!' \
+                % (cls.__name__, k,)
 
-    def __new__(cls):
-        Pool.register(cls, type='model')
-
-    def __init__(self):
-        super(Model, self).__init__()
-        self._rpc = {
-            'default_get': False,
-            'fields_get': False,
-        }
-        self._inherit_fields = []
-        self._error_messages = {}
-        # reinit the cache on _columns and _defaults
-        self.__columns = None
-        self.__defaults = None
-
-        if not self._description:
-            self._description = self._name
-
-        self._inherits_reload()
-        for k in self._defaults:
-            assert (k in self._columns) or (k in self._inherit_fields), \
-            'Default function defined in %s but field %s does not exist!' % \
-                (self._name, k,)
-        self._update_rpc()
-
-    def _update_rpc(self):
-        for field_name in self._columns.keys() + self._inherit_fields.keys():
-            if field_name in self._columns:
-                field = self._columns[field_name]
-            else:
-                field = self._inherit_fields[field_name][2]
+        # Update __rpc__
+        for field_name, field in cls._fields.iteritems():
             if isinstance(field, (fields.Selection, fields.Reference)) \
                     and not isinstance(field.selection, (list, tuple)) \
-                    and field.selection not in self._rpc:
-                self._rpc[field.selection] = False
+                    and field.selection not in cls.__rpc__:
+                instantiate = 0 if field.selection_change_with else None
+                cls.__rpc__.setdefault(field.selection,
+                    RPC(instantiate=instantiate))
 
             for attribute in ('on_change', 'on_change_with', 'autocomplete'):
                 function_name = '%s_%s' % (attribute, field_name)
-                if (getattr(field, attribute, False)
-                        and callable(getattr(self, function_name, False))):
-                    self._rpc.setdefault(function_name, False)
+                if getattr(cls, function_name, None):
+                    cls.__rpc__.setdefault(function_name, RPC(instantiate=0))
 
-    def __getattr__(self, name):
-        # Search if a function exists in inherits parents
-        for model_name, field_name in self._inherits.iteritems():
-            model_obj = self.pool.get(model_name)
-            if hasattr(model_obj, name) and \
-                    callable(getattr(model_obj, name)):
-                return getattr(model_obj, name)
-        raise AttributeError(name)
+        # Update depend on methods
+        for (field_name, attribute), others in (
+                cls.__depend_methods.iteritems()):
+            field = getattr(cls, field_name)
+            for other in others:
+                other_field = getattr(cls, other)
+                setattr(field, attribute,
+                    getattr(field, attribute)
+                    | getattr(other_field, attribute))
 
-    def _inherits_reload(self):
-        """
-        Reconstruct _inherit_fields
-        """
-        res = {}
-        for model in self._inherits:
-            res.update(self.pool.get(model)._inherit_fields)
-            for field_name in self.pool.get(model)._columns.keys():
-                res[field_name] = (model, self._inherits[model],
-                        self.pool.get(model)._columns[field_name])
-            for field_name in self.pool.get(model)._inherit_fields.keys():
-                res[field_name] = (model, self._inherits[model],
-                        self.pool.get(model)._inherit_fields[field_name][2])
-        self._inherit_fields = res
-        self._reset_columns()
-        self._update_rpc()
-        # Update objects that uses this one to update their _inherits fields
-        for obj_name in self.pool.object_name_list():
-            obj = self.pool.get(obj_name)
-            if self._name in obj._inherits:
-                obj._inherits_reload()
-
-    def _reset_xxx2many_targets(self):
-        self.__xxx2many_targets = None
-
-    def _getxxx2many_targets(self):
-        if self.__xxx2many_targets:
-            return self.__xxx2many_targets
-        to_cache = True
-
-        res = [(field_name, field.model_name)
-                for field_name, field in self._columns.iteritems()
-                if field._type == 'one2many']
-
-        for field_name, field in self._columns.iteritems():
-            if field._type != 'many2many':
-                continue
-            if hasattr(field, 'get_target'):
-                try:
-                    model_name = field.get_target(self.pool)._name
-                except KeyError:
-                    to_cache = False
-                    continue
+        # Set name to fields
+        for name, field in cls._fields.iteritems():
+            if field.name is None:
+                field.name = name
             else:
-                model_name = field.model_name
-            res.append((field_name, model_name))
+                assert field.name == name, (
+                    'Duplicate fields on %s: %s, %s'
+                    % (cls, field.name, name))
 
-        res += [(field_name, field.model_name)
-                for _, (_, field_name, field) in \
-                        self._inherit_fields.iteritems()
-                if field._type == 'one2many']
+    @classmethod
+    def _get_name(cls):
+        '''
+        Returns the first non-empty line of the model docstring.
+        '''
+        lines = cls.__doc__.splitlines()
+        for line in lines:
+            line = line.strip()
+            if line:
+                return line
 
-        for _, (_, field_name, field) in self._inherit_fields.iteritems():
-            if field._type != 'many2many':
-                continue
-            if hasattr(field, 'get_target'):
-                try:
-                    model_name = field.get_target(self.pool)._name
-                except KeyError:
-                    to_cache = False
-                    continue
-            else:
-                model_name = field.model_name
-            res.append((field_name, model_name))
-
-        if to_cache:
-            self.__xxx2many_targets = res
-        return res
-
-    _xxx2many_targets = property(fget=_getxxx2many_targets)
-
-    def init(self, module_name):
+    @classmethod
+    def __register__(cls, module_name):
         """
         Add model in ir.model and ir.model.field.
-
-        :param module_name: the module name
         """
-        translation_obj = self.pool.get('ir.translation')
+        super(Model, cls).__register__(module_name)
+        pool = Pool()
+        Translation = pool.get('ir.translation')
+        Model_ = pool.get('ir.model')
+        ModelField = pool.get('ir.model.field')
 
-        cursor = Transaction().cursor
-        # Add model in ir_model
-        cursor.execute("SELECT id FROM ir_model WHERE model = %s",
-                (self._name,))
-        model_id = None
-        if cursor.rowcount == -1 or cursor.rowcount is None:
-            data = cursor.fetchone()
-            if data:
-                model_id, = data
-        elif cursor.rowcount != 0:
-            model_id, = cursor.fetchone()
-        if not model_id:
-            cursor.execute("INSERT INTO ir_model " \
-                    "(model, name, info, module) VALUES (%s, %s, %s, %s)",
-                    (self._name, self._description, self.__doc__,
-                        module_name))
-            cursor.execute("SELECT id FROM ir_model WHERE model = %s",
-                    (self._name,))
-            (model_id,) = cursor.fetchone()
-        else:
-            cursor.execute('UPDATE ir_model ' \
-                    'SET name = %s, ' \
-                        'info = %s ' \
-                    'WHERE id = %s',
-                    (self._description, self.__doc__, model_id))
+        model_id = Model_.register(cls, module_name)
+        ModelField.register(cls, module_name, model_id)
 
-        # Update translation of model
-        for name, src in [(self._name + ',name', self._description)]:
-            cursor.execute('SELECT id FROM ir_translation ' \
-                    'WHERE lang = %s ' \
-                        'AND type = %s ' \
-                        'AND name = %s ' \
-                        'AND res_id = %s',
-                    ('en_US', 'model', name, 0))
-            trans_id = None
-            if cursor.rowcount == -1 or cursor.rowcount is None:
-                data = cursor.fetchone()
-                if data:
-                    trans_id, = data
-            elif cursor.rowcount != 0:
-                trans_id, = cursor.fetchone()
-            src_md5 = translation_obj.get_src_md5(src)
-            if not trans_id:
-                cursor.execute('INSERT INTO ir_translation '
-                    '(name, lang, type, src, src_md5, value, module, fuzzy) '
-                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                    (name, 'en_US', 'model', src, src_md5, '', module_name,
-                        False))
-            else:
-                cursor.execute('UPDATE ir_translation '
-                    'SET src = %s, src_md5 = %s '
-                    'WHERE id = %s',
-                        (src, src_md5, trans_id))
+        Translation.register_model(cls, module_name)
+        Translation.register_fields(cls, module_name)
+        Translation.register_error_messages(cls, module_name)
 
-        # Add field in ir_model_field and update translation
-        cursor.execute('SELECT f.id AS id, f.name AS name, ' \
-                    'f.field_description AS field_description, ' \
-                    'f.ttype AS ttype, f.relation AS relation, ' \
-                    'f.module as module, f.help AS help '\
-                'FROM ir_model_field AS f, ir_model AS m ' \
-                'WHERE f.model = m.id ' \
-                    'AND m.model = %s ',
-                        (self._name,))
-        model_fields = {}
-        for field in cursor.dictfetchall():
-            model_fields[field['name']] = field
-
-        # Prefetch field translations
-        if self._columns:
-            cursor.execute('SELECT id, name, src, type FROM ir_translation ' \
-                    'WHERE lang = %s ' \
-                        'AND type IN (%s, %s, %s) ' \
-                        'AND name IN ' \
-                            '(' + ','.join(('%s',) * len(self._columns)) + ')',
-                            ('en_US', 'field', 'help', 'selection') + \
-                                    tuple([self._name + ',' + x \
-                                        for x in self._columns]))
-        trans_fields = {}
-        trans_help = {}
-        trans_selection = {}
-        for trans in cursor.dictfetchall():
-            if trans['type'] == 'field':
-                trans_fields[trans['name']] = trans
-            elif trans['type'] == 'help':
-                trans_help[trans['name']] = trans
-            elif trans['type'] == 'selection':
-                trans_selection.setdefault(trans['name'], {})
-                trans_selection[trans['name']][trans['src']] = trans
-
-        for field_name in self._columns:
-            field = self._columns[field_name]
-            relation = ''
-            if hasattr(field, 'model_name'):
-                relation = field.model_name
-            elif hasattr(field, 'relation_name'):
-                relation = field.relation_name
-            if field_name not in model_fields:
-                cursor.execute("INSERT INTO ir_model_field " \
-                        "(model, name, field_description, ttype, " \
-                            "relation, help, module) " \
-                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                        (model_id, field_name, field.string, field._type,
-                            relation, field.help, module_name))
-            elif model_fields[field_name]['field_description'] != field.string \
-                    or model_fields[field_name]['ttype'] != field._type \
-                    or model_fields[field_name]['relation'] != relation \
-                    or model_fields[field_name]['help'] != field.help:
-                cursor.execute('UPDATE ir_model_field ' \
-                        'SET field_description = %s, ' \
-                            'ttype = %s, ' \
-                            'relation = %s, ' \
-                            'help = %s ' \
-                        'WHERE id = %s ',
-                        (field.string, field._type, relation,
-                            field.help, model_fields[field_name]['id']))
-            trans_name = self._name + ',' + field_name
-            string_md5 = translation_obj.get_src_md5(field.string)
-            if trans_name not in trans_fields:
-                if field_name not in ('create_uid', 'create_date',
-                            'write_uid', 'write_date', 'id'):
-                    cursor.execute('INSERT INTO ir_translation '
-                        '(name, lang, type, src, src_md5, value, module, fuzzy) '
-                        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                        (trans_name, 'en_US', 'field', field.string,
-                            string_md5, '', module_name, False))
-            elif trans_fields[trans_name]['src'] != field.string:
-                cursor.execute('UPDATE ir_translation '
-                    'SET src = %s, src_md5 = %s '
-                    'WHERE id = %s ',
-                    (field.string, string_md5, trans_fields[trans_name]['id']))
-            help_md5 = translation_obj.get_src_md5(field.help)
-            if trans_name not in trans_help:
-                if field.help:
-                    cursor.execute('INSERT INTO ir_translation '
-                        '(name, lang, type, src, src_md5, value, module, fuzzy) '
-                        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                        (trans_name, 'en_US', 'help', field.help, help_md5, '',
-                            module_name, False))
-            elif trans_help[trans_name]['src'] != field.help:
-                cursor.execute('UPDATE ir_translation '
-                    'SET src = %s, src_md5 = %s '
-                    'WHERE id = %s ',
-                    (field.help, help_md5, trans_help[trans_name]['id']))
-            if hasattr(field, 'selection') \
-                    and isinstance(field.selection, (tuple, list)) \
-                    and ((hasattr(field, 'translate_selection') \
-                        and field.translate_selection)
-                        or not hasattr(field, 'translate_selection')):
-                for (_, val) in field.selection:
-                    if trans_name not in trans_selection \
-                            or val not in trans_selection[trans_name]:
-                        val_md5 = translation_obj.get_src_md5(val)
-                        cursor.execute('INSERT INTO ir_translation '
-                            '(name, lang, type, src, src_md5, value, module, '
-                                'fuzzy) '
-                            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                            (trans_name, 'en_US', 'selection', val, val_md5,
-                                '', module_name, False))
-        # Clean ir_model_field from field that are no more existing.
-        for field_name in model_fields:
-            if model_fields[field_name]['module'] == module_name \
-                    and field_name not in self._columns:
-                #XXX This delete field even when it is defined later
-                # in the module
-                cursor.execute('DELETE FROM ir_model_field '\
-                                   'WHERE id = %s',
-                               (model_fields[field_name]['id'],))
-
-        # Add error messages in ir_translation
-        cursor.execute('SELECT id, src FROM ir_translation ' \
-                'WHERE lang = %s ' \
-                    'AND type = %s ' \
-                    'AND name = %s',
-                ('en_US', 'error', self._name))
-        trans_error = {}
-        for trans in cursor.dictfetchall():
-            trans_error[trans['src']] = trans
-
-        errors = self._get_error_messages()
-        for error in set(errors):
-            if error not in trans_error:
-                error_md5 = translation_obj.get_src_md5(error)
-                cursor.execute('INSERT INTO ir_translation '
-                    '(name, lang, type, src, src_md5, value, module, fuzzy) '
-                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                    (self._name, 'en_US', 'error', error, error_md5, '',
-                        module_name, False))
-
-    def _get_error_messages(self):
-        return self._error_messages.values()
-
-    def default_get(self, fields_names, with_rec_name=True):
+    @classmethod
+    def default_get(cls, fields_names, with_rec_name=True,
+            with_on_change=True):
         '''
         Return a dict with the default values for each field in fields_names.
-
-        :param fields_names: a list of fields names
-        :param with_rec_name: a boolean to add rec_name value
-        :return: a dictionary with field name as key
-            and default value as value
+        If with_rec_name is True, rec_name will be added.
+        If with_on_change is True, on_change will be added.
         '''
-        property_obj = self.pool.get('ir.property')
+        pool = Pool()
+        Property = pool.get('ir.property')
         value = {}
 
         # get the default values defined in the object
         for field_name in fields_names:
-            if field_name in self._defaults:
-                value[field_name] = self._defaults[field_name]()
-            if field_name in self._columns:
-                field = self._columns[field_name]
-            else:
-                field = self._inherit_fields[field_name][2]
+            if field_name in cls._defaults:
+                value[field_name] = cls._defaults[field_name]()
+            field = cls._fields[field_name]
             if (field._type == 'boolean'
                     and not field_name in value):
                 value[field_name] = False
             if isinstance(field, fields.Property):
-                value[field_name] = property_obj.get(field_name, self._name)
+                value[field_name] = Property.get(field_name, cls.__name__)
             if (with_rec_name
                     and field._type in ('many2one',)
                     and value.get(field_name)):
-                obj = self.pool.get(field.model_name)
-                if 'rec_name' in obj._columns:
-                    value[field_name + '.rec_name'] = obj.browse(
+                Target = pool.get(field.model_name)
+                if 'rec_name' in Target._fields:
+                    value[field_name + '.rec_name'] = Target(
                         value[field_name]).rec_name
 
-        value = self._default_on_change(value)
+        if with_on_change:
+            value = cls._default_on_change(value)
         if not with_rec_name:
             for field in value.keys():
                 if field.endswith('.rec_name'):
                     del value[field]
         return value
 
-    def _default_on_change(self, value):
+    @classmethod
+    def _default_on_change(cls, value):
         """
         Call on_change function for the default value
         and return new default value
-
-        :param value: a dictionnary with the default value
-        :return: a new dictionnary of default value
         """
+        pool = Pool()
         res = value.copy()
         val = {}
-        for i in self._inherits.keys():
-            val.update(self.pool.get(i)._default_on_change(value))
         for field in value.keys():
-            if field in self._columns:
-                if self._columns[field].on_change:
-                    args = {}
-                    for arg in self._columns[field].on_change:
-                        args[arg] = value.get(arg, False)
-                        if arg in self._columns \
-                                and self._columns[arg]._type == 'many2one':
-                            if isinstance(args[arg], (list, tuple)):
-                                args[arg] = args[arg][0]
-                    val.update(getattr(self, 'on_change_' + field)(args))
-                if self._columns[field]._type in ('one2many',):
-                    obj = self.pool.get(self._columns[field].model_name)
+            if field in cls._fields:
+                if cls._fields[field].on_change:
+                    inst = cls()
+                    for fname in cls._fields[field].on_change:
+                        setattr(inst, fname, value.get(fname))
+                    val.update(getattr(inst, 'on_change_' + field)())
+                if cls._fields[field]._type in ('one2many',):
+                    Target = pool.get(cls._fields[field].model_name)
                     for val2 in res[field]:
-                        val2.update(obj._default_on_change(val2))
+                        val2.update(Target._default_on_change(val2))
         res.update(val)
         return res
 
-    def fields_get(self, fields_names=None):
+    @classmethod
+    def fields_get(cls, fields_names=None):
         """
         Return the definition of each field on the model.
-
-        :param fields_names: a list of field names or None for all fields
-        :return: a dictionary with field name as key and definition as value
         """
         res = {}
-        translation_obj = self.pool.get('ir.translation')
-        model_access_obj = self.pool.get('ir.model.access')
-        field_access_obj = self.pool.get('ir.model.field.access')
-
-        for parent in self._inherits:
-            res.update(self.pool.get(parent).fields_get(fields_names))
-        write_access = model_access_obj.check(self._name, 'write',
-                raise_exception=False)
+        pool = Pool()
+        Translation = pool.get('ir.translation')
+        FieldAccess = pool.get('ir.model.field.access')
 
         #Add translation to cache
-        language = Transaction().context.get('language') or 'en_US'
+        language = Transaction().language
         trans_args = []
-        for field in (x for x in self._columns.keys()
+        for field in (x for x in cls._fields.keys()
                 if ((not fields_names) or x in fields_names)):
-            trans_args.append((self._name + ',' + field, 'field', language,
+            trans_args.append((cls.__name__ + ',' + field, 'field', language,
                 None))
-            trans_args.append((self._name + ',' + field, 'help', language,
+            trans_args.append((cls.__name__ + ',' + field, 'help', language,
                 None))
-            if hasattr(self._columns[field], 'selection'):
-                if isinstance(self._columns[field].selection, (tuple, list)) \
-                        and ((hasattr(self._columns[field],
-                            'translate_selection') \
-                            and self._columns[field].translate_selection) \
-                            or not hasattr(self._columns[field],
-                                'translate_selection')):
-                    sel = self._columns[field].selection
+            if hasattr(cls._fields[field], 'selection'):
+                if (isinstance(cls._fields[field].selection, (tuple, list))
+                        and ((hasattr(cls._fields[field],
+                                    'translate_selection')
+                                and cls._fields[field].translate_selection)
+                            or not hasattr(cls._fields[field],
+                                'translate_selection'))):
+                    sel = cls._fields[field].selection
                     for (key, val) in sel:
-                        trans_args.append((self._name + ',' + field,
+                        trans_args.append((cls.__name__ + ',' + field,
                             'selection', language, val))
-        translation_obj._get_sources(trans_args)
+        Translation.get_sources(trans_args)
 
         encoder = PYSONEncoder()
 
-        fwrite_accesses = field_access_obj.check(self._name, fields_names or
-                self._columns.keys(), 'write', access=True)
-        for field in (x for x in self._columns.keys()
+        accesses = FieldAccess.get_access([cls.__name__])[cls.__name__]
+        for field in (x for x in cls._fields.keys()
                 if ((not fields_names) or x in fields_names)):
-            res[field] = {'type': self._columns[field]._type}
+            res[field] = {
+                'type': cls._fields[field]._type,
+                'name': field,
+                }
             for arg in (
                     'string',
                     'readonly',
                     'states',
                     'size',
                     'required',
-                    'change_default',
                     'translate',
                     'help',
                     'select',
@@ -517,81 +275,117 @@ class Model(WarningErrorMixin):
                     'datetime_field',
                     'loading',
                     'filename',
+                    'selection_change_with',
                     ):
-                if getattr(self._columns[field], arg, None) is not None:
-                    res[field][arg] = copy.copy(getattr(self._columns[field],
-                        arg))
-            if not write_access or not fwrite_accesses.get(field, True):
+                if getattr(cls._fields[field], arg, None) is not None:
+                    value = getattr(cls._fields[field], arg)
+                    if isinstance(value, set):
+                        value = list(value)
+                    else:
+                        value = copy.copy(value)
+                    res[field][arg] = value
+            if not accesses.get(field, {}).get('write', True):
                 res[field]['readonly'] = True
                 if res[field].get('states') and \
                         'readonly' in res[field]['states']:
                     del res[field]['states']['readonly']
             for arg in ('digits', 'invisible'):
-                if hasattr(self._columns[field], arg) \
-                        and getattr(self._columns[field], arg):
-                    res[field][arg] = copy.copy(getattr(self._columns[field],
+                if hasattr(cls._fields[field], arg) \
+                        and getattr(cls._fields[field], arg):
+                    res[field][arg] = copy.copy(getattr(cls._fields[field],
                         arg))
-            if isinstance(self._columns[field],
-                    (fields.Function, fields.One2Many)) \
-                    and not self._columns[field].order_field:
+            if (isinstance(cls._fields[field],
+                        (fields.Function, fields.One2Many))
+                    and not getattr(cls, 'order_%s' % field, None)):
                 res[field]['sortable'] = False
+            if ((isinstance(cls._fields[field], fields.Function)
+                    and not cls._fields[field].searcher)
+                    or cls._fields[field]._type in ('binary', 'sha')):
+                res[field]['searchable'] = False
+            else:
+                res[field]['searchable'] = True
 
             if Transaction().context.get('language'):
                 # translate the field label
-                res_trans = translation_obj._get_source(
-                        self._name + ',' + field, 'field',
-                        Transaction().context['language'])
+                res_trans = Translation.get_source(
+                    cls.__name__ + ',' + field, 'field',
+                    Transaction().context['language'])
                 if res_trans:
                     res[field]['string'] = res_trans
-                help_trans = translation_obj._get_source(
-                        self._name + ',' + field, 'help',
-                        Transaction().context['language'])
+                help_trans = Translation.get_source(
+                    cls.__name__ + ',' + field, 'help',
+                    Transaction().context['language'])
                 if help_trans:
                     res[field]['help'] = help_trans
 
-            if hasattr(self._columns[field], 'selection'):
-                if isinstance(self._columns[field].selection, (tuple, list)):
-                    sel = copy.copy(self._columns[field].selection)
-                    if Transaction().context.get('language') and \
-                            ((hasattr(self._columns[field],
-                                'translate_selection') \
-                                and self._columns[field].translate_selection) \
-                                or not hasattr(self._columns[field],
-                                    'translate_selection')):
+            if hasattr(cls._fields[field], 'selection'):
+                if isinstance(cls._fields[field].selection, (tuple, list)):
+                    sel = copy.copy(cls._fields[field].selection)
+                    if (Transaction().context.get('language')
+                            and ((hasattr(cls._fields[field],
+                                        'translate_selection')
+                                    and cls._fields[field].translate_selection)
+                                or not hasattr(cls._fields[field],
+                                    'translate_selection'))):
                         # translate each selection option
                         sel2 = []
                         for (key, val) in sel:
-                            val2 = translation_obj._get_source(
-                                    self._name + ',' + field, 'selection',
-                                    language, val)
+                            val2 = Translation.get_source(
+                                cls.__name__ + ',' + field, 'selection',
+                                language, val)
                             sel2.append((key, val2 or val))
                         sel = sel2
                     res[field]['selection'] = sel
                 else:
                     # call the 'dynamic selection' function
                     res[field]['selection'] = copy.copy(
-                            self._columns[field].selection)
+                            cls._fields[field].selection)
             if res[field]['type'] in (
                     'one2many',
                     'many2many',
                     'many2one',
                     'one2one',
                     ):
-                if hasattr(self._columns[field], 'model_name'):
-                    relation = copy.copy(self._columns[field].model_name)
+                if hasattr(cls._fields[field], 'model_name'):
+                    relation = copy.copy(cls._fields[field].model_name)
                 else:
-                    relation = copy.copy(self._columns[field].get_target(
-                        self.pool)._name)
+                    relation = copy.copy(
+                        cls._fields[field].get_target().__name__)
                 res[field]['relation'] = relation
-                res[field]['domain'] = copy.copy(self._columns[field].domain)
-                res[field]['context'] = copy.copy(self._columns[field].context)
+                res[field]['domain'] = copy.copy(cls._fields[field].domain)
+                res[field]['context'] = copy.copy(cls._fields[field].context)
+                res[field]['create'] = accesses.get(field, {}).get('create',
+                    True)
+                res[field]['delete'] = accesses.get(field, {}).get('delete',
+                    True)
             if res[field]['type'] == 'one2many' \
-                    and hasattr(self._columns[field], 'field'):
+                    and hasattr(cls._fields[field], 'field'):
                 res[field]['relation_field'] = copy.copy(
-                        self._columns[field].field)
+                        cls._fields[field].field)
+            if res[field]['type'] == 'many2one':
+                target = cls._fields[field].get_target()
+                for target_name, target_field in target._fields.iteritems():
+                    if (target_field._type == 'one2many'
+                            and target_field.model_name == cls.__name__
+                            and target_field.field == field):
+                        res[field]['relation_field'] = target_name
+                        break
+            if res[field]['type'] in ('datetime', 'time'):
+                res[field]['format'] = copy.copy(cls._fields[field].format)
+            if res[field]['type'] == 'selection':
+                res[field]['context'] = copy.copy(cls._fields[field].context)
+            if res[field]['type'] == 'dict':
+                res[field]['schema_model'] = cls._fields[field].schema_model
+                res[field]['domain'] = copy.copy(cls._fields[field].domain)
+                res[field]['context'] = copy.copy(cls._fields[field].context)
+                res[field]['create'] = accesses.get(field, {}).get('create',
+                    True)
+                res[field]['delete'] = accesses.get(field, {}).get('delete',
+                    True)
 
             # convert attributes into pyson
-            for attr in ('states', 'domain', 'context', 'digits', 'add_remove'):
+            for attr in ('states', 'domain', 'context', 'digits', 'size',
+                    'add_remove', 'format'):
                 if attr in res[field]:
                     res[field][attr] = encoder.encode(res[field][attr])
 
@@ -601,3 +395,120 @@ class Model(WarningErrorMixin):
                 if i not in fields_names:
                     del res[i]
         return res
+
+    def on_change_with(self, fieldnames):
+        changes = {}
+        for fieldname in fieldnames:
+            method_name = 'on_change_with_%s' % fieldname
+            changes[fieldname] = getattr(self, method_name)()
+        return changes
+
+    def pre_validate(self):
+        pass
+
+    def __init__(self, id=None, **kwargs):
+        super(Model, self).__init__()
+        if id is not None:
+            id = int(id)
+        self.__dict__['id'] = id
+        self._values = None
+        parent_values = {}
+        for name, value in kwargs.iteritems():
+            if not name.startswith('_parent_'):
+                setattr(self, name, value)
+            else:
+                parent_values[name] = value
+        for name, value in parent_values.iteritems():
+            parent_name, field = name.split('.', 1)
+            parent_name = parent_name[8:]  # Strip '_parent_'
+            parent = getattr(self, parent_name, None)
+            if parent is not None:
+                setattr(parent, field, value)
+            else:
+                setattr(self, parent_name, {field: value})
+
+    def __getattr__(self, name):
+        if name == 'id':
+            return self.__dict__['id']
+        elif self._values and name in self._values:
+            return self._values.get(name)
+        raise AttributeError("'%s' Model has no attribute '%s': %s"
+            % (self.__name__, name, self._values))
+
+    def __setattr__(self, name, value):
+        if name == 'id':
+            self.__dict__['id'] = value
+            return
+        super(Model, self).__setattr__(name, value)
+
+    def __getitem__(self, name):
+        warnings.warn('Use __getattr__ instead of __getitem__',
+            DeprecationWarning, stacklevel=2)
+        return getattr(self, name)
+
+    def __contains__(self, name):
+        return name in self._fields
+
+    def __int__(self):
+        return int(self.id)
+
+    def __str__(self):
+        return '%s,%s' % (self.__name__, self.id)
+
+    def __unicode__(self):
+        return u'%s,%s' % (self.__name__, self.id)
+
+    def __repr__(self):
+        if self.id < 0:
+            return "Pool().get('%s')(**%s)" % (self.__name__,
+                repr(self._default_values))
+        else:
+            return "Pool().get('%s')(%s)" % (self.__name__, self.id)
+
+    def __eq__(self, other):
+        if not isinstance(other, Model):
+            return NotImplemented
+        if self.id is None or other.id is None:
+            return False
+        return (self.__name__, self.id) == (other.__name__, other.id)
+
+    def __lt__(self, other):
+        if not isinstance(other, Model) or self.__name__ != other.__name__:
+            return NotImplemented
+        return self.id < other.id
+
+    # TODO: replace by total_ordering when 2.6 will be dropped
+    __gt__ = lambda self, other: not (self < other or self == other)
+    __le__ = lambda self, other: self < other or self == other
+    __ge__ = lambda self, other: not self < other
+
+    def __ne__(self, other):
+        if not isinstance(other, Model):
+            return NotImplemented
+        if self.id is None or other.id is None:
+            return True
+        return (self.__name__, self.id) != (other.__name__, other.id)
+
+    def __hash__(self):
+        return hash((self.__name__, self.id))
+
+    def __nonzero__(self):
+        return True
+
+    @property
+    def _default_values(self):
+        if self.id >= 0:
+            return self.id
+        values = {}
+        if self._values:
+            for fname, value in self._values.iteritems():
+                field = self._fields[fname]
+                if isinstance(field, fields.Reference):
+                    if value is not None:
+                        value = str(value)
+                elif isinstance(value, Model):
+                    value = value._default_values
+                elif isinstance(value, list):
+                    value = [r._default_values for r in value]
+                values[fname] = value
+        return values
