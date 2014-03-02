@@ -1,7 +1,10 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
+from sql import Query, Expression
 
-from trytond.model.fields.field import Field
+from .field import Field, SQLType
+from ...transaction import Transaction
+from ...config import CONFIG
 
 
 class Binary(Field):
@@ -10,25 +13,62 @@ class Binary(Field):
     '''
     _type = 'binary'
 
+    def __init__(self, string='', help='', required=False, readonly=False,
+            domain=None, states=None, select=False, on_change=None,
+            on_change_with=None, depends=None, filename=None, context=None,
+            loading='lazy'):
+        if filename is not None:
+            self.filename = filename
+            if depends is None:
+                depends = [filename]
+            else:
+                depends.append(filename)
+        super(Binary, self).__init__(string=string, help=help,
+            required=required, readonly=readonly, domain=domain, states=states,
+            select=select, on_change=on_change, on_change_with=on_change_with,
+            depends=depends, context=context, loading=loading)
+
     @staticmethod
-    def get(cursor, user, ids, model, name, values=None, context=None):
+    def get(ids, model, name, values=None):
         '''
         Convert the binary value into ``str``
 
-        :param cursor: the database cursor
-        :param user: the user id
         :param ids: a list of ids
         :param model: a string with the name of the model
         :param name: a string with the name of the field
         :param values: a dictionary with the read values
-        :param context: the context
         :return: a dictionary with ids as key and values as value
         '''
         if values is None:
             values = {}
         res = {}
+        converter = buffer
+        default = None
+        format_ = Transaction().context.pop('%s.%s' % (model.__name__, name),
+            '')
+        if format_ == 'size':
+            converter = len
+            default = 0
         for i in values:
-            res[i['id']] = i[name] and str(i[name]) or None
+            res[i['id']] = converter(i[name]) if i[name] else default
         for i in ids:
-            res.setdefault(i, None)
+            res.setdefault(i, default)
         return res
+
+    @staticmethod
+    def sql_format(value):
+        if isinstance(value, (Query, Expression)):
+            return value
+        db_type = CONFIG['db_type']
+        if db_type == 'postgresql' and value is not None:
+            import psycopg2
+            return psycopg2.Binary(value)
+        return value
+
+    def sql_type(self):
+        db_type = CONFIG['db_type']
+        if db_type == 'postgresql':
+            return SQLType('BYTEA', 'BYTEA')
+        elif db_type == 'mysql':
+            return SQLType('LONGBLOB', 'LONGBLOB')
+        return SQLType('BLOB', 'BLOB')

@@ -1,201 +1,287 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from trytond.pool import Pool
+
+__all__ = ['Wizard', 'StateView', 'StateTransition', 'StateAction', 'Button']
+
+try:
+    import simplejson as json
+except ImportError:
+    import json
 import copy
-from threading import Lock
-from random import randint
-from sys import maxint
+
+from trytond.pool import Pool, PoolBase
+from trytond.transaction import Transaction
+from trytond.error import WarningErrorMixin
+from trytond.url import URLMixin
+from trytond.protocols.jsonrpc import object_hook, JSONEncoder
+from trytond.model.fields import states_validate
+from trytond.pyson import PYSONEncoder
+from trytond.rpc import RPC
 
 
-class Wizard(object):
-    _name = ""
-    states = {}
-    pool = None
+class Button(object):
+    '''
+    Define a button on wizard.
+    '''
 
-    def __new__(cls):
-        Pool.register(cls, type='wizard')
+    def __init__(self, string, state, icon='', default=False, states=None):
+        self.string = string
+        self.state = state
+        self.icon = icon
+        self.default = bool(default)
+        self.__states = None
+        self.states = states or {}
 
-    def __init__(self):
-        super(Wizard, self).__init__()
-        self._rpc = {
-            'create': True,
-            'delete': True,
-            'execute': True,
-        }
-        self._error_messages = {}
-        self._lock = Lock()
-        self._datas = {}
+    @property
+    def states(self):
+        return self.__states
 
-    def init(self, cursor, module_name):
-        for state in self.states.keys():
-            if self.states[state]['result']['type'] == 'form':
-                for button in \
-                        self.states[state]['result']['state']:
-                    button_name = button[0]
-                    button_value = button[1]
-                    cursor.execute('SELECT id, name, src ' \
-                            'FROM ir_translation ' \
-                            'WHERE module = %s ' \
-                                'AND lang = %s ' \
-                                'AND type = %s ' \
-                                'AND name = %s',
-                            (module_name, 'en_US', 'wizard_button',
-                                self._name + ',' + state + ',' + button_name))
-                    res = cursor.dictfetchall()
-                    if not res:
-                        cursor.execute('INSERT INTO ir_translation ' \
-                                '(name, lang, type, src, value, module, fuzzy)'\
-                                ' VALUES (%s, %s, %s, %s, %s, %s, %s)',
-                                (self._name + ',' + state + ',' + button_name,
-                                    'en_US', 'wizard_button', button_value,
-                                    '', module_name, False))
-                    elif res[0]['src'] != button_value:
-                        cursor.execute('UPDATE ir_translation ' \
-                                'SET src = %s, ' \
-                                    'fuzzy = %s '
-                                'WHERE id = %s', (button_value, True,
-                                    res[0]['id']))
+    @states.setter
+    def states(self, value):
+        states_validate(value)
+        self.__states = value
 
-        cursor.execute('SELECT id, src FROM ir_translation ' \
-                'WHERE lang = %s ' \
-                    'AND type = %s ' \
-                    'AND name = %s',
-                ('en_US', 'error', self._name))
-        trans_error = {}
-        for trans in cursor.dictfetchall():
-            trans_error[trans['src']] = trans
 
-        for error in self._error_messages.values():
-            if error not in trans_error:
-                cursor.execute('INSERT INTO ir_translation ' \
-                        '(name, lang, type, src, value, module, fuzzy) ' \
-                        'VALUES (%s, %s, %s, %s, %s, %s, %s)',
-                        (self._name, 'en_US', 'error', error, '', module_name,
-                            False))
+class State(object):
+    '''
+    A State of a wizard.
+    '''
+    name = None
 
-    def raise_user_error(self, cursor, error, error_args=None,
-            error_description='', error_description_args=None, context=None):
-        translation_obj = self.pool.get('ir.translation')
 
-        if context is None:
-            context = {}
+class StateView(State):
+    '''
+    A view state of a wizard.
+    '''
 
-        error = self._error_messages.get(error, error)
+    def __init__(self, model_name, view, buttons):
+        '''
+        model_name is the name of the model
+        view is the xml id of the view
+        buttons is a list of Button
+        '''
+        self.model_name = model_name
+        self.view = view
+        self.buttons = buttons
+        assert len(self.buttons) == len(set(b.state for b in self.buttons))
+        assert len([b for b in self.buttons if b.default]) <= 1
 
-        res = translation_obj._get_source(cursor, self._name, 'error',
-                context.get('language', 'en_US'), error)
-        if res:
-            error = res
+    def get_view(self):
+        '''
+        Returns the view definition
+        '''
+        Model_ = Pool().get(self.model_name)
+        ModelData = Pool().get('ir.model.data')
+        module, fs_id = self.view.split('.')
+        view_id = ModelData.get_id(module, fs_id)
+        return Model_.fields_view_get(view_id=view_id, view_type='form')
 
-        if error_args:
-            error = error % error_args
+    def get_defaults(self, wizard, state_name, fields):
+        '''
+        Returns defaults values for the fields
+        '''
+        Model_ = Pool().get(self.model_name)
+        defaults = Model_.default_get(fields)
+        default = getattr(wizard, 'default_%s' % state_name, None)
+        if default:
+            defaults.update(default(fields))
+        return defaults
 
-        if error_description:
-            error_description = self._error_messages.get(error_description,
-                    error_description)
+    def get_buttons(self, wizard, state_name):
+        '''
+        Returns button definitions translated
+        '''
+        Translation = Pool().get('ir.translation')
 
-            res = translation_obj._get_source(cursor, self._name, 'error',
-                    context.get('language', 'en_US'), error_description)
-            if res:
-                error_description = res
+        def translation_key(button):
+            return (','.join((wizard.__name__, state_name, button.state)),
+                'wizard_button', Transaction().language, button.string)
+        translation_keys = [translation_key(button) for button in self.buttons]
+        translations = Translation.get_sources(translation_keys)
+        encoder = PYSONEncoder()
+        result = []
+        for button in self.buttons:
+            result.append({
+                    'state': button.state,
+                    'icon': button.icon,
+                    'default': button.default,
+                    'string': (translations.get(translation_key(button))
+                        or button.string),
+                    'states': encoder.encode(button.states),
+                    })
+        return result
 
-            if error_description_args:
-                error_description = error_description % error_description_args
 
-            raise Exception('UserError', error, error_description)
-        raise Exception('UserError', error)
+class StateTransition(State):
+    '''
+    A transition state of a wizard.
+    '''
 
-    def create(self, cursor, user):
-        self._lock.acquire()
-        wiz_id = 0
-        while True:
-            wiz_id = randint(0, maxint)
-            if wiz_id not in self._datas:
-                break
-        self._datas[wiz_id] = {'user': user, '_wiz_id': wiz_id}
-        self._lock.release()
-        return wiz_id
 
-    def delete(self, cursor, user, wiz_id):
-        if wiz_id not in self._datas:
-            return
-        if self._datas[wiz_id]['user'] != user:
-            raise Exception('AccessDenied')
-        self._lock.acquire()
-        del self._datas[wiz_id]
-        self._lock.release()
+class StateAction(StateTransition):
+    '''
+    An action state of a wizard.
+    '''
 
-    def execute(self, cursor, user, wiz_id, data, state='init', context=None):
-        translation_obj = self.pool.get('ir.translation')
-        wizard_size_obj = self.pool.get('ir.action.wizard_size')
-        if context is None:
-            context = {}
-        res = {}
+    def __init__(self, action_id):
+        '''
+        action_id is a string containing ``module.xml_id``
+        '''
+        super(StateAction, self).__init__()
+        self.action_id = action_id
 
-        if self._datas.get(wiz_id, {}).get('user') != user:
-            raise Exception('AccessDenied')
-        self._datas[wiz_id].update(data)
-        data = self._datas[wiz_id]
+    def get_action(self):
+        "Returns action definition"
+        pool = Pool()
+        ModelData = pool.get('ir.model.data')
+        Action = pool.get('ir.action')
+        module, fs_id = self.action_id.split('.')
+        action_id = Action.get_action_id(
+            ModelData.get_id(module, fs_id))
+        action = Action(action_id)
+        return Action.get_action_values(action.type, [action.id])[0]
 
-        state_def = self.states[state]
-        result_def = state_def.get('result', {})
 
-        actions_res = {}
-        # iterate through the list of actions defined for this state
-        for action in state_def.get('actions', []):
-            # execute them
-            action_res = getattr(self, action)(cursor, user, data, context)
-            assert isinstance(action_res, dict), \
-                    'The return value of wizard actions ' \
-                    'should be a dictionary'
-            actions_res.update(action_res)
+class Wizard(WarningErrorMixin, URLMixin, PoolBase):
+    start_state = 'start'
+    end_state = 'end'
 
-        res = copy.copy(result_def)
-        if state_def.get('actions'):
-            res['datas'] = actions_res
+    @classmethod
+    def __setup__(cls):
+        super(Wizard, cls).__setup__()
+        cls.__rpc__ = {
+            'create': RPC(readonly=False),
+            'delete': RPC(readonly=False),
+            'execute': RPC(readonly=False),
+            }
+        cls._error_messages = {}
 
-        lang = context.get('language', 'en_US')
-        if result_def['type'] == 'action':
-            res['action'] = getattr(self, result_def['action'])(cursor, user,
-                    data, context)
-        elif result_def['type'] == 'form':
-            obj = self.pool.get(result_def['object'])
+        # Copy states
+        for attr in dir(cls):
+            if isinstance(getattr(cls, attr), State):
+                setattr(cls, attr, copy.deepcopy(getattr(cls, attr)))
 
-            view = obj.fields_view_get(cursor, user, view_type='form',
-                    context=context, toolbar=False)
-            fields = view['fields']
-            arch = view['arch']
+    @classmethod
+    def __post_setup__(cls):
+        super(Wizard, cls).__post_setup__()
+        # Set states
+        cls.states = {}
+        for attr in dir(cls):
+            if attr.startswith('_'):
+                continue
+            if isinstance(getattr(cls, attr), State):
+                cls.states[attr] = getattr(cls, attr)
 
-            button_list = copy.copy(result_def['state'])
+    @classmethod
+    def __register__(cls, module_name):
+        super(Wizard, cls).__register__(module_name)
+        pool = Pool()
+        Translation = pool.get('ir.translation')
+        Translation.register_wizard(cls, module_name)
+        Translation.register_error_messages(cls, module_name)
 
-            default_values = obj.default_get(cursor, user, fields.keys(),
-                    context=context)
-            for field in default_values.keys():
-                if '.' in field:
+    @classmethod
+    def create(cls):
+        "Create a session"
+        Session = Pool().get('ir.session.wizard')
+        return (Session.create([{}])[0].id, cls.start_state, cls.end_state)
+
+    @classmethod
+    def delete(cls, session_id):
+        "Delete the session"
+        Session = Pool().get('ir.session.wizard')
+        end = getattr(cls, cls.end_state, None)
+        if end:
+            wizard = cls(session_id)
+            action = end(wizard)
+        else:
+            action = None
+        Session.delete([Session(session_id)])
+        return action
+
+    @classmethod
+    def execute(cls, session_id, data, state_name):
+        '''
+        Execute the wizard state.
+
+        session_id is a Session id
+        data is a dictionary with the session data to update
+        state_name is the name of state to execute
+
+        Returns a dictionary with:
+            - ``actions``: a list of Action to execute
+            - ``view``: a dictionary with:
+                - ``fields_view``: a fields/view definition
+                - ``defaults``: a dictionary with default values
+                - ``buttons``: a list of buttons
+        '''
+        wizard = cls(session_id)
+        for key, values in data.iteritems():
+            record = getattr(wizard, key)
+            for field, value in values.iteritems():
+                if field == 'id':
                     continue
-                fields[field]['value'] = default_values[field]
+                setattr(record, field, value)
+        return wizard._execute(state_name)
 
-            # translate buttons
-            for i, button  in enumerate(button_list):
-                button_name = button[0]
-                res_trans = translation_obj._get_source(cursor,
-                        self._name + ',' + state + ',' + button_name,
-                        'wizard_button', lang)
-                if res_trans:
-                    button = list(button)
-                    button[1] = res_trans
-                    button_list[i] = tuple(button)
+    def _execute(self, state_name):
+        if state_name == self.end_state:
+            return {}
 
-            res['fields'] = fields
-            res['arch'] = arch
-            res['state'] = button_list
-            res['size'] = wizard_size_obj.get_size(cursor, user, self._name,
-                    result_def['object'], context=context)
-        elif result_def['type'] == 'choice':
-            next_state = getattr(self, result_def['next_state'])(cursor, user,
-                    data, context)
-            if next_state == 'end':
-                return {'type': 'state', 'state': 'end'}
-            return self.execute(cursor, user, wiz_id, data, next_state,
-                    context=context)
-        return res
+        state = self.states[state_name]
+        result = {}
+
+        if isinstance(state, StateView):
+            view = state.get_view()
+            defaults = state.get_defaults(self, state_name,
+                view['fields'].keys())
+            buttons = state.get_buttons(self, state_name)
+            result['view'] = {
+                'fields_view': view,
+                'defaults': defaults,
+                'buttons': buttons,
+                'state': state_name,
+                }
+        elif isinstance(state, StateTransition):
+            do_result = None
+            if isinstance(state, StateAction):
+                action = state.get_action()
+                do = getattr(self, 'do_%s' % state_name, None)
+                if do:
+                    do_result = do(action)
+                else:
+                    do_result = action, {}
+            transition = getattr(self, 'transition_%s' % state_name, None)
+            if transition:
+                result = self._execute(transition())
+            if do_result:
+                result.setdefault('actions', []).append(do_result)
+        self._save()
+        return result
+
+    def __init__(self, session_id):
+        pool = Pool()
+        Session = pool.get('ir.session.wizard')
+        self._session_id = session_id
+        session = Session(session_id)
+        data = json.loads(session.data.encode('utf-8'),
+            object_hook=object_hook)
+        for state_name, state in self.states.iteritems():
+            if isinstance(state, StateView):
+                Target = pool.get(state.model_name)
+                data.setdefault(state_name, {})
+                setattr(self, state_name, Target(**data[state_name]))
+
+    def _save(self):
+        "Save the session in database"
+        Session = Pool().get('ir.session.wizard')
+        data = {}
+        for state_name, state in self.states.iteritems():
+            if isinstance(state, StateView):
+                data[state_name] = getattr(self, state_name)._default_values
+        session = Session(self._session_id)
+        data = json.dumps(data, cls=JSONEncoder)
+        if data != session.data.encode('utf-8'):
+            Session.write([session], {
+                    'data': data,
+                    })

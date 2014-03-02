@@ -1,164 +1,128 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-
 import unittest
 from datetime import datetime
-from trytond.tests.test_tryton import POOL, DB, USER, CONTEXT, install_module
+from trytond.tests.test_tryton import POOL, DB_NAME, USER, CONTEXT, \
+        install_module
+from trytond.transaction import Transaction
 
 
 class ModelSingletonTestCase(unittest.TestCase):
-    '''
-    Test ModelSingleton
-    '''
+    'Test ModelSingleton'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.singleton = POOL.get('test.singleton')
 
     def test0010read(self):
-        '''
-        Test read method.
-        '''
-        cursor = DB.cursor()
+        'Test read method'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            singleton, = self.singleton.read([1], ['name'])
+            self.assert_(singleton['name'] == 'test')
+            self.assert_(singleton['id'] == 1)
 
-        singleton = self.singleton.read(cursor, USER, 1, ['name'], CONTEXT)
-        self.assert_(singleton['name'] == 'test')
-        self.assert_(singleton['id'] == 1)
+            singleton, = self.singleton.read([1], ['name'])
+            self.assert_(singleton['name'] == 'test')
+            self.assert_(singleton['id'] == 1)
 
-        singleton = self.singleton.read(cursor, USER, [1], ['name'], CONTEXT)[0]
-        self.assert_(singleton['name'] == 'test')
-        self.assert_(singleton['id'] == 1)
+            singleton, = self.singleton.read([1], [
+                'create_uid',
+                'create_uid.rec_name',
+                'create_date',
+                'write_uid',
+                'write_date',
+                ])
+            self.assertEqual(singleton['create_uid'], USER)
+            self.assertEqual(singleton['create_uid.rec_name'], 'Administrator')
+            self.assert_(isinstance(singleton['create_date'], datetime))
+            self.assertEqual(singleton['write_uid'], None)
+            self.assertEqual(singleton['write_date'], None)
 
-        singleton = self.singleton.read(cursor, USER, 1, [
-            'create_uid',
-            'create_date',
-            'write_uid',
-            'write_date',
-            ], CONTEXT)
-        self.assertEqual(singleton['create_uid'], USER)
-        self.assert_(isinstance(singleton['create_date'], datetime))
-        self.assertEqual(singleton['write_uid'], False)
-        self.assertEqual(singleton['write_date'], False)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0020create(self):
-        '''
-        Test create method.
-        '''
-        cursor = DB.cursor()
+        'Test create method'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            singleton, = self.singleton.create([{'name': 'bar'}])
+            self.assert_(singleton)
+            self.assertEqual(singleton.name, 'bar')
 
-        singleton_id = self.singleton.create(cursor, USER, {'name': 'bar'},
-                CONTEXT)
-        self.assert_(singleton_id)
+            singleton2, = self.singleton.create([{'name': 'foo'}])
+            self.assertEqual(singleton2, singleton)
 
-        singleton = self.singleton.read(cursor, USER, singleton_id, ['name'],
-                CONTEXT)
-        self.assert_(singleton['name'] == 'bar')
+            self.assertEqual(singleton.name, 'foo')
 
-        singleton2_id = self.singleton.create(cursor, USER, {'name': 'foo'},
-                CONTEXT)
-        self.assert_(singleton2_id == singleton_id)
+            singletons = self.singleton.search([])
+            self.assertEqual(singletons, [singleton])
 
-        singleton = self.singleton.read(cursor, USER, singleton_id, ['name'],
-                CONTEXT)
-        self.assert_(singleton['name'] == 'foo')
-
-        singleton_ids = self.singleton.search(cursor, USER, [], 0, None, None,
-                CONTEXT)
-        self.assert_(len(singleton_ids) == 1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0030copy(self):
-        '''
-        Test copy method.
-        '''
-        cursor = DB.cursor()
+        'Test copy method'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            singleton, = self.singleton.search([])
 
-        singleton_id = self.singleton.search(cursor, USER, [], 0, None, None,
-                CONTEXT)[0]
+            singleton2, = self.singleton.copy([singleton])
+            self.assertEqual(singleton2, singleton)
 
-        singleton2_id = self.singleton.copy(cursor, USER, singleton_id, None,
-                CONTEXT)
-        self.assert_(singleton2_id == singleton_id)
+            singletons = self.singleton.search([])
+            self.assertEqual(len(singletons), 1)
 
-        singleton_ids = self.singleton.search(cursor, USER, [], 0, None, None,
-                CONTEXT)
-        self.assert_(len(singleton_ids) == 1)
+            singleton3, = self.singleton.copy([singleton], {'name': 'bar'})
+            self.assertEqual(singleton3, singleton)
 
-        singleton3_id = self.singleton.copy(cursor, USER, singleton_id,
-                {'name': 'bar'}, CONTEXT)
-        self.assert_(singleton3_id == singleton_id)
+            singletons = self.singleton.search([])
+            self.assertEqual(len(singletons), 1)
 
-        singleton_ids = self.singleton.search(cursor, USER, [], 0, None, None,
-                CONTEXT)
-        self.assert_(len(singleton_ids) == 1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0040default_get(self):
-        '''
-        Test default_get method.
-        '''
-        cursor = DB.cursor()
+        'Test default_get method'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            default = self.singleton.default_get(['name'])
+            self.assertEqual(default, {'name': 'test'})
 
-        default = self.singleton.default_get(cursor, USER, ['name'], CONTEXT)
-        self.assert_(default == {'name': 'test'})
+            default = self.singleton.default_get(['create_uid'])
+            self.assertEqual(len(default), 2)
 
-        default = self.singleton.default_get(cursor, USER, ['create_uid'],
-                CONTEXT)
-        self.assert_(len(default) == 2)
+            default = self.singleton.default_get(['create_uid'],
+                    with_rec_name=False)
+            self.assertEqual(len(default), 1)
 
-        default = self.singleton.default_get(cursor, USER, ['create_uid'],
-                CONTEXT, False)
-        self.assert_(len(default) == 1)
+            self.singleton.create([{'name': 'bar'}])
 
-        self.singleton.create(cursor, USER, {'name': 'bar'}, CONTEXT)
+            default = self.singleton.default_get(['name'])
+            self.assertEqual(default, {'name': 'bar'})
 
-        default = self.singleton.default_get(cursor, USER, ['name'], CONTEXT)
-        self.assert_(default == {'name': 'bar'})
+            default = self.singleton.default_get(['create_uid'])
+            self.assertEqual(len(default), 2)
 
-        default = self.singleton.default_get(cursor, USER, ['create_uid'],
-                CONTEXT)
-        self.assert_(len(default) == 2)
+            default = self.singleton.default_get(['create_uid'],
+                    with_rec_name=False)
+            self.assertEqual(len(default), 1)
 
-        default = self.singleton.default_get(cursor, USER, ['create_uid'],
-                CONTEXT, False)
-        self.assert_(len(default) == 1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0050search(self):
-        '''
-        Test search method.
-        '''
-        cursor = DB.cursor()
+        'Test search method'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            singletons = self.singleton.search([])
+            self.assertEqual(map(int, singletons), [1])
 
-        singleton_ids = self.singleton.search(cursor, USER, [], 0, None, None,
-                CONTEXT)
-        self.assert_(singleton_ids == [1])
+            singletons = self.singleton.search([])
+            self.assertEqual(map(int, singletons), [1])
 
-        singleton_ids = self.singleton.search(cursor, USER, [], 0, 1, None,
-                CONTEXT)
-        self.assert_(singleton_ids == [1])
+            count = self.singleton.search([], count=True)
+            self.assertEqual(count, 1)
 
-        singleton_ids = self.singleton.search(cursor, USER, [], 0, None, None,
-                CONTEXT, True)
-        self.assert_(singleton_ids == 1)
+            transaction.cursor.rollback()
 
-        cursor.rollback()
-        cursor.close()
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(ModelSingletonTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)

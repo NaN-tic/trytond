@@ -61,9 +61,9 @@ When defining an `ir.action.report` the following attributes are available:
     * ``name``: The name of the report.
 
     * ``report_name``: The name of the report model, for example
-      my_module.my_report.  This is the name you would use with `pool.get`
+      my_module.my_report.  This is the name you would use with `Pool().get`
 
-    * ``module_name``: If this report is of an existing model this is its name.
+    * ``model``: If this report is of an existing model this is its name.
       For example my_module.my_model. Custom reports that aren't of a specific
       model will need to leave this blank.
 
@@ -73,6 +73,8 @@ When defining an `ir.action.report` the following attributes are available:
     * ``style``: The path to the style file starting with the module, for
       example, my_module/my_style.odt. If no style is to be used this field
       will be blank.
+
+    * ``template_extension``: The template format.
 
 
 Report Usage
@@ -181,7 +183,7 @@ Creating a simple report template for a model in XML
 Less work has to be done if you just want a simple report representation of a
 model.  There are just 2 steps.  First, create a report template file in a
 format supported by relatorio.  Second, describe your report in XML making sure
-to define the correct report_name and module_name.
+to define the correct ``report_name`` and ``model``.
 
 Replacing existing Tryton reports
 ---------------------------------
@@ -211,6 +213,7 @@ Then you must activate the new invoice report that exists in your new module:
     <field name="model">account.invoice</field>
     <field name="report">my_module/invoice.odt</field>
     <field name="style">module_name/header_A4.odt</field>
+    <field name="template_extension">odt</field>
   </record>
 
 Passing custom data to a report
@@ -225,19 +228,21 @@ context.  Now the invoice report will be able to access the employee object.
 
 ::
 
-  class InvoiceReport(Report):
-      _name = 'account.invoice'
-      def parse(self, cursor, user_id, report, objects, datas, context):
-          employee_obj = self.pool.get('company.employee')
-          employee = False
-          if context.get('employee', False):
-              employee = employee_obj.browse(cursor, user_id,
-                                             context['employee'],
-                                             context=context)
-          context['employee'] = employee
-          return super(InvoiceReport, self).parse(cursor, user_id, report,
-                                                  objects, datas, context)
-  InvoiceReport()
+    from trytond.report import Report
+    from tryton.pool import Pool
+
+    class InvoiceReport(Report):
+        __name__ = 'account.invoice'
+
+        def parse(self, report, objects, datas, localcontext):
+            employee_obj = Pool().get('company.employee')
+            employee = False
+            if Transaction().context.get('employee'):
+                employee = employee_obj.browse(Transaction().context['employee'])
+            localcontext['employee'] = employee
+            return super(InvoiceReport, self).parse(report, objects, datas,
+                     localcontext)
+    Pool.register(InvoiceReport, type_='report')
 
 
 Replacing existing Tryton styles
@@ -249,8 +254,8 @@ the default style.
 
 .. _Genshi XML Templates: http://genshi.edgewall.org/wiki/Documentation/0.5.x/xml-templates.html
 
-.. _Quick Example: http://relatorio.openhex.org/wiki/QuickExample
+.. _Quick Example: http://code.google.com/p/python-relatorio/wiki/QuickExample
 
-.. _In Depth Introduction: http://relatorio.openhex.org/wiki/IndepthIntroduction
+.. _In Depth Introduction: http://code.google.com/p/python-relatorio/wiki/IndepthIntroduction
 
-.. _Example Documents: http://relatorio.openhex.org/browser/examples
+.. _Example Documents: http://code.google.com/p/python-relatorio/source/browse/#hg%2Fexamples

@@ -1,93 +1,84 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-"Properties"
-from trytond.model import ModelView, ModelSQL, fields
 from decimal import Decimal
+from ..model import ModelView, ModelSQL, fields
+from ..transaction import Transaction
+from ..cache import Cache
+from ..pool import Pool
+
+__all__ = [
+    'Property',
+    ]
 
 
 class Property(ModelSQL, ModelView):
     "Property"
-    _name = 'ir.property'
-    _description = __doc__
-    name = fields.Char('Name')
+    __name__ = 'ir.property'
+    _rec_name = 'field'
     value = fields.Reference('Value', selection='models_get')
-    res = fields.Reference('Resource', selection='models_get', select=1)
+    res = fields.Reference('Resource', selection='models_get', select=True)
     field = fields.Many2One('ir.model.field', 'Field',
-        ondelete='CASCADE', required=True, select=1)
+        ondelete='CASCADE', required=True, select=True)
+    _models_get_cache = Cache('ir_property.models_get', context=False)
 
-    def models_get(self, cursor, user, context=None):
-        cursor.execute('SELECT model, name FROM ir_model ORDER BY name ASC')
-        res = cursor.fetchall() + [('', '')]
-        return res
+    @classmethod
+    def models_get(cls):
+        pool = Pool()
+        Model = pool.get('ir.model')
+        models = cls._models_get_cache.get(None)
+        if models:
+            return models
+        cursor = Transaction().cursor
+        model = Model.__table__()
+        cursor.execute(*model.select(model.model, model.name,
+                order_by=model.name.asc))
+        models = cursor.fetchall() + [('', '')]
+        cls._models_get_cache.set(None, models)
+        return models
 
-    def get(self, cursor, user, names, model, res_ids=None, context=None):
+    @classmethod
+    def get(cls, names, model, res_ids=None):
         """
-        Return property value for each res_ids
-        :param cursor: the database cursor
-        :param user: the user id
-        :param names: property name or a list of property names
-        :param model: object name
-        :param res_ids: a list of record ids
-        :param context: the context
-        :return: a dictionary
+        Return named property values for each res_ids of model
         """
-        model_field_obj = self.pool.get('ir.model.field')
-        model_access_obj = self.pool.get('ir.model.access')
+        pool = Pool()
+        ModelAccess = pool.get('ir.model.access')
         res = {}
 
-        model_access_obj.check(cursor, user, model, 'read', context=context)
+        ModelAccess.check(model, 'read')
 
         names_list = True
         if not isinstance(names, list):
             names_list = False
             names = [names]
+        if res_ids is None:
+            res_ids = []
 
-        field_ids = model_field_obj.search(cursor, user, [
-            ('name', 'in', names),
-            ('model.model', '=', model),
-            ], order=[], context=context)
-        fields = model_field_obj.browse(cursor, user, field_ids, context=context)
+        properties = cls.search([
+            ('field.name', 'in', names),
+            ['OR',
+                ('res', '=', None),
+                ('res', 'in', ['%s,%s' % (model, x) for x in res_ids]),
+                ],
+            ], order=[])
 
-        default_ids = self.search(cursor, user, [
-            ('field', 'in', field_ids),
-            ('res', '=', False),
-            ], order=[], context=context)
-        default_vals = dict((x, False) for x in names)
-        if default_ids:
-            for property in self.browse(cursor, user, default_ids,
-                    context=context):
-                value = property.value
-                val = False
-                if value:
-                    if value.split(',')[0]:
-                        try:
-                            val = int(value.split(',')[1]\
-                                    .split(',')[0].strip('('))
-                        except ValueError:
-                            val = False
+        default_vals = dict((x, None) for x in names)
+        for property_ in (x for x in properties if not x.res):
+            value = property_.value
+            val = None
+            if value is not None:
+                if not isinstance(value, basestring):
+                    val = int(value)
+                else:
+                    if property_.field.ttype == 'numeric':
+                        val = Decimal(value.split(',')[1])
+                    elif property_.field.ttype in ('char', 'selection'):
+                        val = value.split(',')[1]
                     else:
-                        if property.field.ttype == 'numeric':
-                            val = Decimal(value.split(',')[1])
-                        elif property.field.ttype in ('char', 'selection'):
-                            val = value.split(',')[1]
-                        else:
-                            raise Exception('Not implemented')
-                default_vals[property.field.name] = val
-
-        id_found = {}
+                        raise Exception('Not implemented')
+            default_vals[property_.field.name] = val
 
         if not res_ids:
-            for field in fields:
-                if field.ttype == 'many2one':
-                    obj = self.pool.get(field.relation)
-                    id_found.setdefault(field.relation, set())
-                    if default_vals[field.name] not in id_found[field.relation]\
-                            and not obj.search(cursor, user, [
-                                ('id', '=', default_vals[field.name]),
-                                ], order=[], context=context):
-                        default_vals[field.name] = False
-                    if default_vals[field.name]:
-                        id_found[field.relation].add(default_vals[field.name])
             if not names_list:
                 return default_vals[names[0]]
             return default_vals
@@ -95,123 +86,79 @@ class Property(ModelSQL, ModelView):
         for name in names:
             res[name] = dict((x, default_vals[name]) for x in res_ids)
 
-        property_ids = self.search(cursor, user, [
-            ('field', 'in', field_ids),
-            ('res', 'in', [model + ',' + str(obj_id) \
-                    for obj_id in  res_ids]),
-            ], order=[], context=context)
-        for property in self.browse(cursor, user, property_ids,
-                context=context):
-            val = False
-            if property.value:
-                if property.value.split(',')[0]:
-                    try:
-                        val = int(property.value.split(',')[1]\
-                                .split(',')[0].strip('('))
-                    except ValueError:
-                        val = False
+        for property_ in (x for x in properties if x.res):
+            val = None
+            if property_.value is not None:
+                if not isinstance(property_.value, basestring):
+                    val = int(property_.value)
                 else:
-                    if property.field.ttype == 'numeric':
-                        val = Decimal(property.value.split(',')[1])
-                    elif property.field.ttype in ('char', 'selection'):
-                        val = property.value.split(',')[1]
+                    if property_.field.ttype == 'numeric':
+                        val = Decimal(property_.value.split(',')[1])
+                    elif property_.field.ttype in ('char', 'selection'):
+                        val = property_.value.split(',')[1]
                     else:
                         raise Exception('Not implemented')
-            res[property.field.name][
-                    int(property.res.split(',')[1].split(',')[0].strip('('))] = val
+            res[property_.field.name][int(property_.res)] = val
 
-        for field in fields:
-            if field.ttype == 'many2one':
-                obj = self.pool.get(field.relation)
-                id_found.setdefault(field.relation, set())
-                if set(res[field.name].values()).issubset(
-                        id_found[field.relation]):
-                    continue
-                obj_ids = obj.search(cursor, user, [
-                    ('id', 'in', res[field.name].values()),
-                    ], order=[], context=context)
-                id_found[field.relation].update(obj_ids)
-                for res_id in res[field.name]:
-                    if res[field.name][res_id] not in obj_ids:
-                        res[field.name][res_id] = False
         if not names_list:
             return res[names[0]]
         return res
 
-    def _set_values(self, cursor, user, name, model, res_id, val, field_id,
-            context=None):
+    @staticmethod
+    def _set_values(model, res_id, val, field_id):
         return {
-            'name': name,
             'value': val,
             'res': model + ',' + str(res_id),
             'field': field_id,
         }
 
-    def set(self, cursor, user, name, model, ids, val, context=None):
+    @classmethod
+    def set(cls, name, model, ids, val):
         """
-        Set property value for ids
-        :param cursor: the database cursor
-        :param user: the user id
-        :param names: property name
-        :param model: object name
-        :param ids: a list of ids
-        :param val: the value
-        :param context: the context
-        :return: the id of the record created
+        Set named property value for ids of model
+        Return the id of the record created
         """
-        model_field_obj = self.pool.get('ir.model.field')
-        model_access_obj = self.pool.get('ir.model.access')
+        pool = Pool()
+        ModelField = pool.get('ir.model.field')
+        ModelAccess = pool.get('ir.model.access')
 
-        model_access_obj.check(cursor, user, model, 'write', context=context)
+        ModelAccess.check(model, 'write')
 
-        if context is None:
-            context = {}
-        ctx = context.copy()
-        ctx['user'] = user
-
-        field_id = model_field_obj.search(cursor, user, [
+        model_field, = ModelField.search([
             ('name', '=', name),
             ('model.model', '=', model),
-            ], order=[], limit=1, context=context)[0]
-        field = model_field_obj.browse(cursor, user, field_id, context=context)
+            ], order=[], limit=1)
+        Model = pool.get(model)
+        field = Model._fields[name]
 
-        property_ids = self.search(cursor, user, [
-            ('field', '=', field_id),
+        properties = cls.search([
+            ('field', '=', model_field.id),
             ('res', 'in', [model + ',' + str(res_id) for res_id in ids]),
-            ], order=[], context=context)
-        self.delete(cursor, 0, property_ids, context=ctx)
+            ], order=[])
+        with Transaction().set_user(0, set_context=True):
+            cls.delete(properties)
 
-        default_id = self.search(cursor, user, [
-            ('field', '=', field_id),
-            ('res', '=', False),
-            ], order=[], limit=1, context=context)
-        default_val = False
-        if default_id:
-            value = self.browse(cursor, user, default_id[0],
-                    context=context).value
-            default_val = False
-            if value:
-                if value.split(',')[0]:
-                    try:
-                        default_val = int(value.split(',')[1]\
-                                .split(',')[0].strip('('))
-                    except ValueError:
-                        default_val = False
+        defaults = cls.search([
+            ('field', '=', model_field.id),
+            ('res', '=', None),
+            ], order=[], limit=1)
+        default_val = None
+        if defaults:
+            value = cls(defaults[0].id).value
+            default_val = None
+            if value is not None:
+                if not isinstance(value, basestring):
+                    default_val = int(value)
                 else:
-                    if field.ttype == 'numeric':
+                    if field._type == 'numeric':
                         default_val = Decimal(value.split(',')[1])
-                    elif field.ttype in ('char', 'selection'):
+                    elif field._type in ('char', 'selection'):
                         default_val = value.split(',')[1]
                     else:
                         raise Exception('Not implemented')
 
-
-        res = False
         if (val != default_val):
             for res_id in ids:
-                vals = self._set_values(cursor, user, name, model, res_id, val,
-                        field_id, context=context)
-                res = self.create(cursor, 0, vals, context=ctx)
-        return res
-
-Property()
+                vals = cls._set_values(model, res_id, val, model_field.id)
+                with Transaction().set_user(0, set_context=True):
+                    cls.create([vals])

@@ -7,18 +7,22 @@ How to install Tryton
 Prerequisites
 =============
 
-    * Python 2.4 or later (http://www.python.org/)
+    * Python 2.7 or later (http://www.python.org/)
     * lxml 2.0 or later (http://codespeak.net/lxml/)
-    * relatorio 0.2.0 or later (http://relatorio.openhex.org/)
+    * relatorio 0.2.0 or later (http://code.google.com/p/python-relatorio/)
     * python-dateutil (http://labix.org/python-dateutil)
-    * simplejson (http://undefined.org/python/#simplejson)
+    * polib (https://bitbucket.org/izi/polib/wiki/Home)
+    * python-sql 0.2 or later (http://code.google.com/p/python-sql/)
     * Optional: psycopg 2 or later (http://www.initd.org/)
     * Optional: MySQL-python (http://sourceforge.net/projects/mysql-python/)
-    * Optional: pywebdav 0.9.3 or later (http://code.google.com/p/pywebdav/)
+    * Optional: pywebdav 0.9.8 or later (http://code.google.com/p/pywebdav/)
     * Optional: pydot (http://code.google.com/p/pydot/)
-    * Optional: pytz (http://pytz.sourceforge.net/)
-    * Optional: openoffice-python (http://pypi.python.org/pypi/openoffice-python/)
+    * Optional: unoconv http://dag.wieers.com/home-made/unoconv/)
     * Optional: sphinx (http://sphinx.pocoo.org/)
+    * Optional: simplejson (http://undefined.org/python/#simplejson)
+    * Optional: cdecimal (http://www.bytereef.org/mpdecimal/index.html)
+    * Optional: python-Levenshtein
+      (http://github.com/miohtama/python-Levenshtein)
 
 Install Tryton
 ==============

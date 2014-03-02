@@ -1,21 +1,28 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-
+import sys
+try:
+    import cdecimal
+    if 'decimal' not in sys.modules:
+        sys.modules['decimal'] = cdecimal
+except ImportError:
+    import decimal
+    sys.modules['cdecimal'] = decimal
 import unittest
 import datetime
 from decimal import Decimal
-from trytond.tests.test_tryton import POOL, DB, USER, CONTEXT, install_module
+from trytond.tests.test_tryton import POOL, DB_NAME, USER, CONTEXT, \
+        install_module
+from trytond.transaction import Transaction
+from trytond.exceptions import UserError
 
 
 class FieldsTestCase(unittest.TestCase):
-    '''
-    Test Fields.
-    '''
+    'Test Fields'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.boolean = POOL.get('test.boolean')
         self.boolean_default = POOL.get('test.boolean_default')
 
@@ -56,2033 +63,3229 @@ class FieldsTestCase(unittest.TestCase):
         self.datetime = POOL.get('test.datetime')
         self.datetime_default = POOL.get('test.datetime_default')
         self.datetime_required = POOL.get('test.datetime_required')
+        self.datetime_format = POOL.get('test.datetime_format')
+
+        self.time = POOL.get('test.time')
+        self.time_default = POOL.get('test.time_default')
+        self.time_required = POOL.get('test.time_required')
+        self.time_format = POOL.get('test.time_format')
+
+        self.one2one = POOL.get('test.one2one')
+        self.one2one_target = POOL.get('test.one2one.target')
+        self.one2one_required = POOL.get('test.one2one_required')
+        self.one2one_domain = POOL.get('test.one2one_domain')
+
+        self.one2many = POOL.get('test.one2many')
+        self.one2many_target = POOL.get('test.one2many.target')
+        self.one2many_required = POOL.get('test.one2many_required')
+        self.one2many_reference = POOL.get('test.one2many_reference')
+        self.one2many_reference_target = POOL.get(
+            'test.one2many_reference.target')
+        self.one2many_size = POOL.get('test.one2many_size')
+        self.one2many_size_pyson = POOL.get('test.one2many_size_pyson')
+
+        self.many2many = POOL.get('test.many2many')
+        self.many2many_target = POOL.get('test.many2many.target')
+        self.many2many_required = POOL.get('test.many2many_required')
+        self.many2many_reference = POOL.get('test.many2many_reference')
+        self.many2many_reference_target = POOL.get(
+            'test.many2many_reference.target')
+        self.many2many_size = POOL.get('test.many2many_size')
+        self.many2many_size_target = POOL.get('test.many2many_size.target')
+
+        self.reference = POOL.get('test.reference')
+        self.reference_target = POOL.get('test.reference.target')
+        self.reference_required = POOL.get('test.reference_required')
+
+        self.property_ = POOL.get('test.property')
+        self.ir_property = POOL.get('ir.property')
+        self.model_field = POOL.get('ir.model.field')
+
+        self.selection = POOL.get('test.selection')
+        self.selection_required = POOL.get('test.selection_required')
+
+        self.dict_ = POOL.get('test.dict')
+        self.dict_default = POOL.get('test.dict_default')
+        self.dict_required = POOL.get('test.dict_required')
+
+        self.binary = POOL.get('test.binary')
+        self.binary_default = POOL.get('test.binary_default')
+        self.binary_required = POOL.get('test.binary_required')
+
+        self.m2o_domain_validation = POOL.get('test.many2one_domainvalidation')
+        self.m2o_target = POOL.get('test.many2one_target')
 
     def test0010boolean(self):
-        '''
-        Test Boolean.
-        '''
-        cursor = DB.cursor()
+        'Test Boolean'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            boolean1, = self.boolean.create([{
+                        'boolean': True,
+                        }])
+            self.assert_(boolean1)
+            self.assertEqual(boolean1.boolean, True)
 
-        boolean1_id = self.boolean.create(cursor, USER, {
-            'boolean': True,
-            }, CONTEXT)
-        self.assert_(boolean1_id)
+            booleans = self.boolean.search([
+                    ('boolean', '=', True),
+                    ])
+            self.assertEqual(booleans, [boolean1])
 
-        boolean1 = self.boolean.read(cursor, USER, boolean1_id, ['boolean'],
-                CONTEXT)
-        self.assert_(boolean1['boolean'] == True)
+            booleans = self.boolean.search([
+                    ('boolean', '!=', True),
+                    ])
+            self.assertEqual(booleans, [])
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', '=', True),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [boolean1_id])
+            booleans = self.boolean.search([
+                    ('boolean', 'in', [True]),
+                    ])
+            self.assertEqual(booleans, [boolean1])
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', '!=', True),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [])
+            booleans = self.boolean.search([
+                    ('boolean', 'in', [False]),
+                    ])
+            self.assertEqual(booleans, [])
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', 'in', [True]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [boolean1_id])
+            booleans = self.boolean.search([
+                    ('boolean', 'not in', [True]),
+                    ])
+            self.assertEqual(booleans, [])
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', 'in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [])
+            booleans = self.boolean.search([
+                    ('boolean', 'not in', [False]),
+                    ])
+            self.assertEqual(booleans, [boolean1])
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', 'not in', [True]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [])
+            boolean2, = self.boolean.create([{
+                        'boolean': False,
+                        }])
+            self.assert_(boolean2)
+            self.assertEqual(boolean2.boolean, False)
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', 'not in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [boolean1_id])
+            booleans = self.boolean.search([
+                    ('boolean', '=', False),
+                    ])
+            self.assertEqual(booleans, [boolean2])
 
-        boolean2_id = self.boolean.create(cursor, USER, {
-            'boolean': False,
-            }, CONTEXT)
-        self.assert_(boolean2_id)
+            booleans = self.boolean.search([
+                    ('boolean', 'in', [True, False]),
+                    ])
+            self.assertEqual(booleans, [boolean1, boolean2])
 
-        boolean2 = self.boolean.read(cursor, USER, boolean2_id, ['boolean'],
-                CONTEXT)
-        self.assert_(boolean2['boolean'] == False)
+            booleans = self.boolean.search([
+                    ('boolean', 'not in', [True, False]),
+                    ])
+            self.assertEqual(booleans, [])
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', '=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [boolean2_id])
+            boolean3, = self.boolean.create([{}])
+            self.assert_(boolean3)
+            self.assertEqual(boolean3.boolean, False)
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', 'in', [True, False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [boolean1_id, boolean2_id])
+            # Test search with NULL value
+            boolean4, = self.boolean.create([{
+                        'boolean': None,
+                        }])
+            self.assert_(boolean4)
 
-        boolean_ids = self.boolean.search(cursor, USER, [
-            ('boolean', 'not in', [True, False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(boolean_ids == [])
+            booleans = self.boolean.search([
+                    ('boolean', '=', False),
+                    ])
+            self.assertEqual(booleans,
+                [boolean2, boolean3, boolean4])
 
-        boolean3_id = self.boolean.create(cursor, USER, {}, CONTEXT)
-        self.assert_(boolean3_id)
+            booleans = self.boolean.search([
+                    ('boolean', '!=', False),
+                    ])
+            self.assertEqual(booleans, [boolean1])
 
-        boolean3 = self.boolean.read(cursor, USER, boolean3_id, ['boolean'],
-                CONTEXT)
-        self.assert_(boolean3['boolean'] == False)
+            boolean4, = self.boolean_default.create([{}])
+            self.assert_(boolean4)
+            self.assertTrue(boolean4.boolean)
 
-        boolean4_id = self.boolean_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(boolean4_id)
+            self.boolean.write([boolean1], {
+                    'boolean': False,
+                    })
+            self.assertEqual(boolean1.boolean, False)
 
-        boolean4 = self.boolean_default.read(cursor, USER, boolean4_id,
-                ['boolean'], CONTEXT)
-        self.assert_(boolean4['boolean'] == True)
+            self.boolean.write([boolean2], {
+                    'boolean': True,
+                    })
+            self.assertEqual(boolean2.boolean, True)
 
-        self.boolean.write(cursor, USER, boolean1_id, {
-            'boolean': False,
-            }, CONTEXT)
-        boolean1 = self.boolean.read(cursor, USER, boolean1_id, ['boolean'],
-                CONTEXT)
-        self.assert_(boolean1['boolean'] == False)
-
-        self.boolean.write(cursor, USER, boolean2_id, {
-            'boolean': True,
-            }, CONTEXT)
-        boolean2 = self.boolean.read(cursor, USER, boolean2_id, ['boolean'],
-                CONTEXT)
-        self.assert_(boolean2['boolean'] == True)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0020integer(self):
-        '''
-        Test Integer.
-        '''
-        cursor = DB.cursor()
+        'Test Integer'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            integer1, = self.integer.create([{
+                        'integer': 1,
+                        }])
+            self.assert_(integer1)
+            self.assertEqual(integer1.integer, 1)
 
-        integer1_id = self.integer.create(cursor, USER, {
-            'integer': 1,
-            }, CONTEXT)
-        self.assert_(integer1_id)
+            integers = self.integer.search([
+                    ('integer', '=', 1),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer1 = self.integer.read(cursor, USER, integer1_id, ['integer'],
-                CONTEXT)
-        self.assert_(integer1['integer'] == 1)
+            integers = self.integer.search([
+                    ('integer', '=', 0),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '=', 1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '!=', 1),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '=', 0),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '!=', 0),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '!=', 1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', 'in', [1]),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '!=', 0),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', 'in', [0]),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'in', [1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', 'in', []),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'in', [0]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', 'not in', [1]),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', 'not in', [0]),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'not in', [1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', 'not in', []),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'not in', [0]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '<', 5),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'not in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '<', -5),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '<', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '<', 1),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '<', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '<=', 5),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '<', 1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '<=', -5),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '<=', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '<=', 1),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '<=', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '>', 5),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '<=', 1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '>', -5),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '>', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '>', 1),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '>', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '>=', 5),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '>', 1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '>=', -5),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '>=', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            integers = self.integer.search([
+                    ('integer', '>=', 1),
+                    ])
+            self.assertEqual(integers, [integer1])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '>=', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integer2, = self.integer.create([{
+                        'integer': 0,
+                        }])
+            self.assert_(integer2)
+            self.assertEqual(integer2.integer, 0)
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '>=', 1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id])
+            integers = self.integer.search([
+                    ('integer', '=', 0),
+                    ])
+            self.assertEqual(integers, [integer2])
 
-        integer2_id = self.integer.create(cursor, USER, {
-            'integer': 0,
-            }, CONTEXT)
-        self.assert_(integer2_id)
+            integers = self.integer.search([
+                    ('integer', 'in', [0, 1]),
+                    ])
+            self.assertEqual(integers, [integer1, integer2])
 
-        integer2 = self.integer.read(cursor, USER, integer2_id, ['integer'],
-                CONTEXT)
-        self.assert_(integer2['integer'] == 0)
+            integers = self.integer.search([
+                    ('integer', 'not in', [0, 1]),
+                    ])
+            self.assertEqual(integers, [])
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', '=', 0),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer2_id])
+            integer3, = self.integer.create([{}])
+            self.assert_(integer3)
+            self.assertEqual(integer3.integer, None)
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'in', [0, 1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [integer1_id, integer2_id])
+            integer4, = self.integer_default.create([{}])
+            self.assert_(integer4)
+            self.assertEqual(integer4.integer, 5)
 
-        integer_ids = self.integer.search(cursor, USER, [
-            ('integer', 'not in', [0, 1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(integer_ids == [])
+            self.integer.write([integer1], {
+                    'integer': 0,
+                    })
+            self.assertEqual(integer1.integer, 0)
 
-        integer3_id = self.integer.create(cursor, USER, {}, CONTEXT)
-        self.assert_(integer3_id)
+            self.integer.write([integer2], {
+                    'integer': 1,
+                    })
+            self.assertEqual(integer2.integer, 1)
 
-        integer3 = self.integer.read(cursor, USER, integer3_id, ['integer'],
-                CONTEXT)
-        self.assert_(integer3['integer'] == 0)
+            self.assertRaises(Exception, self.integer.create, [{
+                        'integer': 'test',
+                        }])
 
-        integer4_id = self.integer_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(integer4_id)
-
-        integer4 = self.integer_default.read(cursor, USER, integer4_id,
-                ['integer'], CONTEXT)
-        self.assert_(integer4['integer'] == 5)
-
-        self.integer.write(cursor, USER, integer1_id, {
-            'integer': 0,
-            }, CONTEXT)
-        integer1 = self.integer.read(cursor, USER, integer1_id, ['integer'],
-                CONTEXT)
-        self.assert_(integer1['integer'] == 0)
-
-        self.integer.write(cursor, USER, integer2_id, {
-            'integer': 1,
-            }, CONTEXT)
-        integer2 = self.integer.read(cursor, USER, integer2_id, ['integer'],
-                CONTEXT)
-        self.assert_(integer2['integer'] == 1)
-
-        self.failUnlessRaises(Exception, self.integer.create, cursor, USER, {
-            'integer': 'test',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.integer.write, cursor, USER,
-                integer1_id, {
+            self.assertRaises(Exception, self.integer.write, [integer1], {
                     'integer': 'test',
-                    }, CONTEXT)
+                    })
 
-        integer5_id = self.integer_required.create(cursor, USER, {}, CONTEXT)
-        self.assert_(integer5_id)
+            # We should catch UserError but mysql does not raise an
+            # IntegrityError but an OperationalError
+            self.assertRaises(Exception, self.integer_required.create, [{}])
+            transaction.cursor.rollback()
 
-        integer5 = self.integer_required.read(cursor, USER, integer5_id,
-                ['integer'], CONTEXT)
-        self.assert_(integer5['integer'] == 0)
+            integer5, = self.integer_required.create([{
+                        'integer': 0,
+                        }])
+            self.assert_(integer5)
+            self.assertEqual(integer5.integer, 0)
 
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0030float(self):
-        '''
-        Test Float.
-        '''
-        cursor = DB.cursor()
+        'Test Float'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            float1, = self.float.create([{
+                        'float': 1.1,
+                        }])
+            self.assert_(float1)
+            self.assertEqual(float1.float, 1.1)
 
-        float1_id = self.float.create(cursor, USER, {
-            'float': 1.1,
-            }, CONTEXT)
-        self.assert_(float1_id)
+            floats = self.float.search([
+                    ('float', '=', 1.1),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float1 = self.float.read(cursor, USER, float1_id, ['float'], CONTEXT)
-        self.assert_(float1['float'] == 1.1)
+            floats = self.float.search([
+                    ('float', '=', 0),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '=', 1.1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '!=', 1.1),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '=', 0),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '!=', 0),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '!=', 1.1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', 'in', [1.1]),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '!=', 0),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', 'in', [0]),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'in', [1.1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', 'in', []),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'in', [0]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', 'not in', [1.1]),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', 'not in', [0]),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'not in', [1.1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', 'not in', []),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'not in', [0]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '<', 5),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'not in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '<', -5),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '<', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '<', 1.1),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '<', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '<=', 5),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '<', 1.1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '<=', -5),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '<=', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '<=', 1.1),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '<=', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '>', 5),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '<=', 1.1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '>', -5),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '>', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '>', 1.1),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '>', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '>=', 5),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '>', 1.1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '>=', -5),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '>=', 5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            floats = self.float.search([
+                    ('float', '>=', 1.1),
+                    ])
+            self.assertEqual(floats, [float1])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '>=', -5),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            float2, = self.float.create([{
+                        'float': 0,
+                        }])
+            self.assert_(float2)
+            self.assertEqual(float2.float, 0)
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '>=', 1.1),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id])
+            floats = self.float.search([
+                    ('float', '=', 0),
+                    ])
+            self.assertEqual(floats, [float2])
 
-        float2_id = self.float.create(cursor, USER, {
-            'float': 0,
-            }, CONTEXT)
-        self.assert_(float2_id)
+            floats = self.float.search([
+                    ('float', 'in', [0, 1.1]),
+                    ])
+            self.assertEqual(floats, [float1, float2])
 
-        float2 = self.float.read(cursor, USER, float2_id, ['float'], CONTEXT)
-        self.assert_(float2['float'] == 0)
+            floats = self.float.search([
+                    ('float', 'not in', [0, 1.1]),
+                    ])
+            self.assertEqual(floats, [])
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', '=', 0),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float2_id])
+            float3, = self.float.create([{}])
+            self.assert_(float3)
+            self.assertEqual(float3.float, None)
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'in', [0, 1.1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [float1_id, float2_id])
+            float4, = self.float_default.create([{}])
+            self.assert_(float4)
+            self.assertEqual(float4.float, 5.5)
 
-        float_ids = self.float.search(cursor, USER, [
-            ('float', 'not in', [0, 1.1]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(float_ids == [])
+            self.float.write([float1], {
+                    'float': 0,
+                    })
+            self.assertEqual(float1.float, 0)
 
-        float3_id = self.float.create(cursor, USER, {}, CONTEXT)
-        self.assert_(float3_id)
+            self.float.write([float2], {
+                    'float': 1.1,
+                    })
+            self.assertEqual(float2.float, 1.1)
 
-        float3 = self.float.read(cursor, USER, float3_id, ['float'], CONTEXT)
-        self.assert_(float3['float'] == 0)
+            self.assertRaises(Exception, self.float.create, [{
+                        'float': 'test',
+                        }])
 
-        float4_id = self.float_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(float4_id)
-
-        float4 = self.float_default.read(cursor, USER, float4_id, ['float'],
-                CONTEXT)
-        self.assert_(float4['float'] == 5.5)
-
-        self.float.write(cursor, USER, float1_id, {
-            'float': 0,
-            }, CONTEXT)
-        float1 = self.float.read(cursor, USER, float1_id, ['float'] , CONTEXT)
-        self.assert_(float1['float'] == 0)
-
-        self.float.write(cursor, USER, float2_id, {
-            'float': 1.1,
-            }, CONTEXT)
-        float2 = self.float.read(cursor, USER, float2_id, ['float'], CONTEXT)
-        self.assert_(float2['float'] == 1.1)
-
-        self.failUnlessRaises(Exception, self.float.create, cursor, USER, {
-            'float': 'test',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.float.write, float1_id, cursor,
-                USER, {
+            self.assertRaises(Exception, self.float.write, [float1], {
                     'float': 'test',
-                    }, CONTEXT)
+                    })
 
-        float5_id = self.float_required.create(cursor, USER, {}, CONTEXT)
-        self.assert_(float5_id)
+            self.assertRaises(Exception, self.float_required.create, [{}])
+            transaction.cursor.rollback()
 
-        float5 = self.float_required.read(cursor, USER, float5_id, ['float'],
-                CONTEXT)
-        self.assert_(float5['float'] == 0)
+            float5, = self.float_required.create([{
+                        'float': 0.0,
+                        }])
+            self.assertEqual(float5.float, 0.0)
 
-        float6_id = self.float_digits.create(cursor, USER, {
-            'digits': 1,
-            'float': 1.1,
-            }, CONTEXT)
-        self.assert_(float6_id)
+            float6, = self.float_digits.create([{
+                        'digits': 1,
+                        'float': 1.1,
+                        }])
+            self.assert_(float6)
 
-        self.failUnlessRaises(Exception, self.float_digits.create, cursor,
-                USER, {
-                    'digits': 1,
+            self.assertRaises(Exception, self.float_digits.create, [{
+                        'digits': 1,
+                        'float': 1.11,
+                        }])
+
+            self.assertRaises(Exception, self.float_digits.write,
+                [float6], {
                     'float': 1.11,
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.float_digits.write, cursor,
-                USER, float6_id, {
-                    'float': 1.11,
-                    }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.float_digits.write, cursor,
-                USER, float6_id, {
+            self.assertRaises(Exception, self.float_digits.write,
+                [float6], {
                     'digits': 0,
-                    }, CONTEXT)
+                    })
 
-        float7_id = self.float.create(cursor, USER, {
-            'float': 0.123456789012345,
-            }, CONTEXT)
+            float7, = self.float.create([{
+                        'float': 0.123456789012345,
+                        }])
+            self.assertEqual(float7.float, 0.123456789012345)
 
-        float7 = self.float.read(cursor, USER, float7_id, ['float'], CONTEXT)
-        self.assert_(float7['float'] == 0.123456789012345)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0040numeric(self):
-        '''
-        Test Numeric.
-        '''
-        cursor = DB.cursor()
+        'Test Numeric'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            numeric1, = self.numeric.create([{
+                        'numeric': Decimal('1.1'),
+                        }])
+            self.assert_(numeric1)
+            self.assertEqual(numeric1.numeric, Decimal('1.1'))
 
-        numeric1_id = self.numeric.create(cursor, USER, {
-            'numeric': Decimal('1.1'),
-            }, CONTEXT)
-        self.assert_(numeric1_id)
+            numerics = self.numeric.search([
+                    ('numeric', '=', Decimal('1.1')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric1 = self.numeric.read(cursor, USER, numeric1_id, ['numeric'],
-                CONTEXT)
-        self.assert_(numeric1['numeric'] == Decimal('1.1'))
+            numerics = self.numeric.search([
+                    ('numeric', '=', Decimal('0')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '=', Decimal('1.1')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '!=', Decimal('1.1')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '=', Decimal('0')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '!=', Decimal('0')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '!=', Decimal('1.1')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', 'in', [Decimal('1.1')]),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '!=', Decimal('0')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', 'in', [Decimal('0')]),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'in', [Decimal('1.1')]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', 'in', []),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'in', [Decimal('0')]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', 'not in', [Decimal('1.1')]),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', 'not in', [Decimal('0')]),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'not in', [Decimal('1.1')]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', 'not in', []),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'not in', [Decimal('0')]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '<', Decimal('5')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'not in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '<', Decimal('-5')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '<', Decimal('5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '<', Decimal('1.1')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '<', Decimal('-5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '<=', Decimal('5')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '<', Decimal('1.1')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '<=', Decimal('-5')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '<=', Decimal('5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '<=', Decimal('1.1')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '<=', Decimal('-5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '>', Decimal('5')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '<=', Decimal('1.1')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '>', Decimal('-5')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '>', Decimal('5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '>', Decimal('1.1')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '>', Decimal('-5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '>=', Decimal('5')),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '>', Decimal('1.1')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '>=', Decimal('-5')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '>=', Decimal('5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            numerics = self.numeric.search([
+                    ('numeric', '>=', Decimal('1.1')),
+                    ])
+            self.assertEqual(numerics, [numeric1])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '>=', Decimal('-5')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numeric2, = self.numeric.create([{
+                        'numeric': Decimal('0'),
+                        }])
+            self.assert_(numeric2)
+            self.assertEqual(numeric2.numeric, Decimal('0'))
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '>=', Decimal('1.1')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id])
+            numerics = self.numeric.search([
+                    ('numeric', '=', Decimal('0')),
+                    ])
+            self.assertEqual(numerics, [numeric2])
 
-        numeric2_id = self.numeric.create(cursor, USER, {
-            'numeric': Decimal('0'),
-            }, CONTEXT)
-        self.assert_(numeric2_id)
+            numerics = self.numeric.search([
+                    ('numeric', 'in', [Decimal('0'), Decimal('1.1')]),
+                    ])
+            self.assertEqual(numerics, [numeric1, numeric2])
 
-        numeric2 = self.numeric.read(cursor, USER, numeric2_id, ['numeric'],
-                CONTEXT)
-        self.assert_(numeric2['numeric'] == Decimal('0'))
+            numerics = self.numeric.search([
+                    ('numeric', 'not in', [Decimal('0'), Decimal('1.1')]),
+                    ])
+            self.assertEqual(numerics, [])
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', '=', Decimal('0')),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric2_id])
+            numeric3, = self.numeric.create([{}])
+            self.assert_(numeric3)
+            self.assertEqual(numeric3.numeric, None)
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'in', [Decimal('0'), Decimal('1.1')]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [numeric1_id, numeric2_id])
+            numeric4, = self.numeric_default.create([{}])
+            self.assert_(numeric4)
+            self.assertEqual(numeric4.numeric, Decimal('5.5'))
 
-        numeric_ids = self.numeric.search(cursor, USER, [
-            ('numeric', 'not in', [Decimal('0'), Decimal('1.1')]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(numeric_ids == [])
+            self.numeric.write([numeric1], {
+                    'numeric': Decimal('0'),
+                    })
+            self.assertEqual(numeric1.numeric, Decimal('0'))
 
-        numeric3_id = self.numeric.create(cursor, USER, {}, CONTEXT)
-        self.assert_(numeric3_id)
+            self.numeric.write([numeric2], {
+                    'numeric': Decimal('1.1'),
+                    })
+            self.assertEqual(numeric2.numeric, Decimal('1.1'))
 
-        numeric3 = self.numeric.read(cursor, USER, numeric3_id, ['numeric'],
-                CONTEXT)
-        self.assert_(numeric3['numeric'] == Decimal('0'))
+            self.assertRaises(Exception, self.numeric.create, [{
+                        'numeric': 'test',
+                        }])
 
-        numeric4_id = self.numeric_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(numeric4_id)
-
-        numeric4 = self.numeric_default.read(cursor, USER, numeric4_id,
-                ['numeric'], CONTEXT)
-        self.assert_(numeric4['numeric'] == Decimal('5.5'))
-
-        self.numeric.write(cursor, USER, numeric1_id, {
-            'numeric': Decimal('0'),
-            }, CONTEXT)
-        numeric1 = self.numeric.read(cursor, USER, numeric1_id, ['numeric'] ,
-                CONTEXT)
-        self.assert_(numeric1['numeric'] == Decimal('0'))
-
-        self.numeric.write(cursor, USER, numeric2_id, {
-            'numeric': Decimal('1.1'),
-            }, CONTEXT)
-        numeric2 = self.numeric.read(cursor, USER, numeric2_id, ['numeric'],
-                CONTEXT)
-        self.assert_(numeric2['numeric'] == Decimal('1.1'))
-
-        self.failUnlessRaises(Exception, self.numeric.create, cursor, USER, {
-            'numeric': 'test',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.numeric.write, numeric1_id,
-                cursor, USER, {
+            self.assertRaises(Exception, self.numeric.write, [numeric1], {
                     'numeric': 'test',
-                    }, CONTEXT)
+                    })
 
-        numeric5_id = self.numeric_required.create(cursor, USER, {}, CONTEXT)
-        self.assert_(numeric5_id)
+            self.assertRaises(Exception, self.numeric_required.create, [{}])
+            transaction.cursor.rollback()
 
-        numeric5 = self.numeric_required.read(cursor, USER, numeric5_id,
-                ['numeric'], CONTEXT)
-        self.assert_(numeric5['numeric'] == Decimal('0'))
+            numeric5, = self.numeric_required.create([{
+                    'numeric': Decimal(0),
+                    }])
+            self.assertEqual(numeric5.numeric, 0)
 
-        numeric6_id = self.numeric_digits.create(cursor, USER, {
-            'digits': 1,
-            'numeric': Decimal('1.1'),
-            }, CONTEXT)
-        self.assert_(numeric6_id)
+            numeric6, = self.numeric_digits.create([{
+                        'digits': 1,
+                        'numeric': Decimal('1.1'),
+                        }])
+            self.assert_(numeric6)
 
-        self.failUnlessRaises(Exception, self.numeric_digits.create, cursor,
-                USER, {
-                    'digits': 1,
+            self.assertRaises(Exception, self.numeric_digits.create, [{
+                        'digits': 1,
+                        'numeric': Decimal('1.11'),
+                        }])
+
+            self.assertRaises(Exception, self.numeric_digits.write,
+                [numeric6], {
                     'numeric': Decimal('1.11'),
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.numeric_digits.write, cursor,
-                USER, numeric6_id, {
-                    'numeric': Decimal('1.11'),
-                    }, CONTEXT)
+            self.assertRaises(Exception, self.numeric_digits.write,
+                [numeric6], {
+                    'numeric': Decimal('0.10000000000000001'),
+                    })
 
-        self.failUnlessRaises(Exception, self.numeric_digits.write, cursor,
-                USER, numeric6_id, {
+            self.assertRaises(Exception, self.numeric_digits.write,
+                [numeric6], {
                     'digits': 0,
-                    }, CONTEXT)
+                    })
 
-        numeric7_id = self.numeric.create(cursor, USER, {
-            'numeric': Decimal('0.1234567890123456789'),
-            }, CONTEXT)
-
-        numeric7 = self.numeric.read(cursor, USER, numeric7_id, ['numeric'],
-                CONTEXT)
-        self.assert_(numeric7['numeric'] ==
+            numeric7, = self.numeric.create([{
+                        'numeric': Decimal('0.1234567890123456789'),
+                        }])
+            self.assertEqual(numeric7.numeric,
                 Decimal('0.1234567890123456789'))
 
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0050char(self):
-        '''
-        Test Char.
-        '''
-        cursor = DB.cursor()
+        'Test Char'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            for char in (self.char_translate, self.char):
+                char1, = char.create([{
+                            'char': 'Test',
+                            }])
+                self.assert_(char1)
+                self.assertEqual(char1.char, 'Test')
 
-        for char in (self.char, self.char_translate):
-            char1_id = char.create(cursor, USER, {
-                'char': 'Test',
-                }, CONTEXT)
-            self.assert_(char1_id)
+                chars = char.search([
+                        ('char', '=', 'Test'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char1 = char.read(cursor, USER, char1_id, ['char'], CONTEXT)
-            self.assert_(char1['char'] == 'Test')
+                chars = char.search([
+                        ('char', '=', 'Foo'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '=', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', '=', None),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '=', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', '!=', 'Test'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '=', False),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', '!=', 'Foo'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '!=', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', '!=', None),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '!=', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'in', ['Test']),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '!=', False),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'in', ['Foo']),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'in', ['Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'in', [None]),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'in', ['Foo']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'in', []),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'in', [False]),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not in', ['Test']),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'in', []),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not in', ['Foo']),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not in', ['Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not in', [None]),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not in', ['Foo']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'not in', []),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not in', [False]),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'like', 'Test'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not in', []),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'like', 'T%'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'like', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'like', 'Foo'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'like', 'T%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'like', 'F%'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'like', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'ilike', 'test'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'like', 'F%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'ilike', 't%'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'ilike', 'test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'ilike', 'foo'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'ilike', 't%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'ilike', 'f%'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'ilike', 'foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not like', 'Test'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'ilike', 'f%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not like', 'T%'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not like', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not like', 'Foo'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not like', 'T%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not like', 'F%'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not like', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'not ilike', 'test'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not like', 'F%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', 'not ilike', 't%'),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not ilike', 'test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not ilike', 'foo'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not ilike', 't%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+                chars = char.search([
+                        ('char', 'not ilike', 'f%'),
+                        ])
+                self.assertEqual(chars, [char1])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not ilike', 'foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                char2, = char.create([{
+                            'char': None,
+                            }])
+                self.assert_(char2)
+                self.assertEqual(char2.char, None)
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not ilike', 'f%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id])
+                chars = char.search([
+                        ('char', '=', None),
+                        ])
+                self.assertEqual(chars, [char2])
 
-            char2_id = char.create(cursor, USER, {
-                'char': False,
-                }, CONTEXT)
-            self.assert_(char2_id)
+                chars = char.search([
+                        ('char', 'in', [None, 'Test']),
+                        ])
+                self.assertEqual(chars, [char1, char2])
 
-            char2 = char.read(cursor, USER, char2_id, ['char'], CONTEXT)
-            self.assert_(char2['char'] == None)
+                chars = char.search([
+                        ('char', 'not in', [None, 'Test']),
+                        ])
+                self.assertEqual(chars, [])
 
-            char_ids = char.search(cursor, USER, [
-                ('char', '=', False),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char2_id])
+            char3, = self.char.create([{}])
+            self.assert_(char3)
+            self.assertEqual(char3.char, None)
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'in', [False, 'Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [char1_id, char2_id])
+            char4, = self.char_default.create([{}])
+            self.assert_(char4)
+            self.assertEqual(char4.char, 'Test')
 
-            char_ids = char.search(cursor, USER, [
-                ('char', 'not in', [False, 'Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(char_ids == [])
+            self.char.write([char1], {
+                    'char': None,
+                    })
+            self.assertEqual(char1.char, None)
 
-        char3_id = self.char.create(cursor, USER, {}, CONTEXT)
-        self.assert_(char3_id)
+            self.char.write([char2], {
+                    'char': 'Test',
+                    })
+            self.assertEqual(char2.char, 'Test')
 
-        char3 = self.char.read(cursor, USER, char3_id, ['char'], CONTEXT)
-        self.assert_(char3['char'] == None)
+            self.assertRaises(Exception, self.char_required.create, [{}])
+            transaction.cursor.rollback()
 
-        char4_id = self.char_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(char4_id)
+            self.assertRaises(Exception, self.char_required.create, [{
+                    'char': '',
+                    }])
+            transaction.cursor.rollback()
 
-        char4 = self.char_default.read(cursor, USER, char4_id, ['char'],
-                CONTEXT)
-        self.assert_(char4['char'] == 'Test')
+            char5, = self.char_required.create([{
+                        'char': 'Test',
+                        }])
+            self.assert_(char5)
 
-        self.char.write(cursor, USER, char1_id, {
-            'char': False,
-            }, CONTEXT)
-        char1 = self.char.read(cursor, USER, char1_id, ['char'], CONTEXT)
-        self.assert_(char1['char'] == None)
+            char6, = self.char_size.create([{
+                        'char': 'Test',
+                        }])
+            self.assert_(char6)
 
-        self.char.write(cursor, USER, char2_id, {
-            'char': 'Test',
-            }, CONTEXT)
-        char2 = self.char.read(cursor, USER, char2_id, ['char'], CONTEXT)
-        self.assert_(char2['char'] == 'Test')
-
-        self.failUnlessRaises(Exception, self.char_required.create, cursor,
-                USER, {}, CONTEXT)
-        cursor.rollback()
-
-        char5_id = self.char_required.create(cursor, USER, {
-            'char': 'Test',
-            }, CONTEXT)
-        self.assert_(char5_id)
-
-        char6_id = self.char_size.create(cursor, USER, {
-            'char': 'Test',
-            }, CONTEXT)
-        self.assert_(char6_id)
-
-        self.failUnlessRaises(Exception, self.char_size.create, cursor, USER, {
-            'char': 'foobar',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.char_size.write, cursor, USER,
-                char6_id, {
+            self.assertRaises(Exception, self.char_size.create, [{
                     'char': 'foobar',
-                    }, CONTEXT)
-        cursor.rollback()
+                    }])
 
-        char7_id = self.char.create(cursor, USER, {
-            'char': u'é',
-            }, CONTEXT)
-        self.assert_(char7_id)
+            self.assertRaises(Exception, self.char_size.write, [char6], {
+                    'char': 'foobar',
+                    })
+            transaction.cursor.rollback()
 
-        char7 = self.char.read(cursor, USER, char7_id, ['char'], CONTEXT)
-        self.assert_(char7['char'] == u'é')
+            char7, = self.char.create([{
+                        'char': u'é',
+                        }])
+            self.assert_(char7)
+            self.assertEqual(char7.char, u'é')
 
-        char_ids = self.char.search(cursor, USER, [
-            ('char', '=', u'é'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(char_ids == [char7_id])
+            chars = self.char.search([
+                    ('char', '=', u'é'),
+                    ])
+            self.assertEqual(chars, [char7])
 
-        self.char.write(cursor, USER, char7_id, {
-            'char': 'é',
-            }, CONTEXT)
-        char7 = self.char.read(cursor, USER, char7_id, ['char'], CONTEXT)
-        self.assert_(char7['char'] == u'é')
+            self.char.write([char7], {
+                    'char': 'é',
+                    })
+            self.assertEqual(char7.char, u'é')
 
-        char_ids = self.char.search(cursor, USER, [
-            ('char', '=', 'é'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(char_ids == [char7_id])
+            chars = self.char.search([
+                    ('char', '=', 'é'),
+                    ])
+            self.assertEqual(chars, [char7])
 
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0060text(self):
-        '''
-        Test Text.
-        '''
-        cursor = DB.cursor()
+        'Test Text'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            for text in (self.text_translate, self.text):
+                text1, = text.create([{
+                            'text': 'Test',
+                            }])
+                self.assert_(text1)
+                self.assertEqual(text1.text, 'Test')
 
-        for text in (self.text, self.text_translate):
-            text1_id = text.create(cursor, USER, {
-                'text': 'Test',
-                }, CONTEXT)
-            self.assert_(text1_id)
+                texts = text.search([
+                        ('text', '=', 'Test'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text1 = text.read(cursor, USER, text1_id, ['text'], CONTEXT)
-            self.assert_(text1['text'] == 'Test')
+                texts = text.search([
+                        ('text', '=', 'Foo'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '=', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', '=', None),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '=', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', '!=', 'Test'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '=', False),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', '!=', 'Foo'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '!=', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', '!=', None),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '!=', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'in', ['Test']),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '!=', False),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'in', ['Foo']),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'in', ['Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'in', [None]),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'in', ['Foo']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'in', []),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'in', [False]),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not in', ['Test']),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'in', []),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not in', ['Foo']),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not in', ['Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not in', [None]),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not in', ['Foo']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'not in', []),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not in', [False]),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'like', 'Test'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not in', []),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'like', 'T%'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'like', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'like', 'Foo'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'like', 'T%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'like', 'F%'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'like', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'ilike', 'test'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'like', 'F%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'ilike', 't%'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'ilike', 'test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'ilike', 'foo'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'ilike', 't%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'ilike', 'f%'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'ilike', 'foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not like', 'Test'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'ilike', 'f%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not like', 'T%'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not like', 'Test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not like', 'Foo'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not like', 'T%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not like', 'F%'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not like', 'Foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'not ilike', 'test'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not like', 'F%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', 'not ilike', 't%'),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not ilike', 'test'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not ilike', 'foo'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not ilike', 't%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+                texts = text.search([
+                        ('text', 'not ilike', 'f%'),
+                        ])
+                self.assertEqual(texts, [text1])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not ilike', 'foo'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                text2, = text.create([{
+                            'text': None,
+                            }])
+                self.assert_(text2)
+                self.assertEqual(text2.text, None)
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not ilike', 'f%'),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id])
+                texts = text.search([
+                        ('text', '=', None),
+                        ])
+                self.assertEqual(texts, [text2])
 
-            text2_id = text.create(cursor, USER, {
-                'text': False,
-                }, CONTEXT)
-            self.assert_(text2_id)
+                texts = text.search([
+                        ('text', 'in', [None, 'Test']),
+                        ])
+                self.assertEqual(texts, [text1, text2])
 
-            text2 = text.read(cursor, USER, text2_id, ['text'], CONTEXT)
-            self.assert_(text2['text'] == None)
+                texts = text.search([
+                        ('text', 'not in', [None, 'Test']),
+                        ])
+                self.assertEqual(texts, [])
 
-            text_ids = text.search(cursor, USER, [
-                ('text', '=', False),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text2_id])
+            text3, = self.text.create([{}])
+            self.assert_(text3)
+            self.assertEqual(text3.text, None)
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'in', [False, 'Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [text1_id, text2_id])
+            text4, = self.text_default.create([{}])
+            self.assert_(text4)
+            self.assertEqual(text4.text, 'Test')
 
-            text_ids = text.search(cursor, USER, [
-                ('text', 'not in', [False, 'Test']),
-                ], 0, None, None, CONTEXT)
-            self.assert_(text_ids == [])
+            self.text.write([text1], {
+                    'text': None,
+                    })
+            self.assertEqual(text1.text, None)
 
-        text3_id = self.text.create(cursor, USER, {}, CONTEXT)
-        self.assert_(text3_id)
+            self.text.write([text2], {
+                    'text': 'Test',
+                    })
+            self.assertEqual(text2.text, 'Test')
 
-        text3 = self.text.read(cursor, USER, text3_id, ['text'], CONTEXT)
-        self.assert_(text3['text'] == None)
+            self.assertRaises(Exception, self.text_required.create, [{}])
+            transaction.cursor.rollback()
 
-        text4_id = self.text_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(text4_id)
+            text5, = self.text_required.create([{
+                        'text': 'Test',
+                        }])
+            self.assert_(text5)
 
-        text4 = self.text_default.read(cursor, USER, text4_id, ['text'],
-                CONTEXT)
-        self.assert_(text4['text'] == 'Test')
+            text6, = self.text_size.create([{
+                        'text': 'Test',
+                        }])
+            self.assert_(text6)
 
-        self.text.write(cursor, USER, text1_id, {
-            'text': False,
-            }, CONTEXT)
-        text1 = self.text.read(cursor, USER, text1_id, ['text'], CONTEXT)
-        self.assert_(text1['text'] == None)
+            self.assertRaises(Exception, self.text_size.create, [{
+                        'text': 'foobar',
+                        }])
 
-        self.text.write(cursor, USER, text2_id, {
-            'text': 'Test',
-            }, CONTEXT)
-        text2 = self.text.read(cursor, USER, text2_id, ['text'], CONTEXT)
-        self.assert_(text2['text'] == 'Test')
-
-        self.failUnlessRaises(Exception, self.text_required.create, cursor,
-                USER, {}, CONTEXT)
-        cursor.rollback()
-
-        text5_id = self.text_required.create(cursor, USER, {
-            'text': 'Test',
-            }, CONTEXT)
-        self.assert_(text5_id)
-
-        text6_id = self.text_size.create(cursor, USER, {
-            'text': 'Test',
-            }, CONTEXT)
-        self.assert_(text6_id)
-
-        self.failUnlessRaises(Exception, self.text_size.create, cursor, USER, {
-            'text': 'foobar',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.text_size.write, cursor, USER,
-                text6_id, {
+            self.assertRaises(Exception, self.text_size.write, [text6], {
                     'text': 'foobar',
-                    }, CONTEXT)
+                    })
 
-        text7_id = self.text.create(cursor, USER, {
-            'text': 'Foo\nBar',
-            }, CONTEXT)
-        self.assert_(text7_id)
+            text7, = self.text.create([{
+                        'text': 'Foo\nBar',
+                        }])
+            self.assert_(text7)
 
-        text8_id = self.text.create(cursor, USER, {
-            'text': u'é',
-            }, CONTEXT)
-        self.assert_(text8_id)
+            text8, = self.text.create([{
+                        'text': u'é',
+                        }])
+            self.assert_(text8)
+            self.assertEqual(text8.text, u'é')
 
-        text8 = self.text.read(cursor, USER, text8_id, ['text'], CONTEXT)
-        self.assert_(text8['text'] == u'é')
+            texts = self.text.search([
+                    ('text', '=', u'é'),
+                    ])
+            self.assertEqual(texts, [text8])
 
-        text_ids = self.text.search(cursor, USER, [
-            ('text', '=', u'é'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(text_ids == [text8_id])
+            self.text.write([text8], {
+                    'text': 'é',
+                    })
+            self.assertEqual(text8.text, u'é')
 
-        self.text.write(cursor, USER, text8_id, {
-            'text': 'é',
-            }, CONTEXT)
-        text8 = self.text.read(cursor, USER, text8_id, ['text'], CONTEXT)
-        self.assert_(text8['text'] == u'é')
+            texts = self.text.search([
+                    ('text', '=', 'é'),
+                    ])
+            self.assertEqual(texts, [text8])
 
-        text_ids = self.text.search(cursor, USER, [
-            ('text', '=', 'é'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(text_ids == [text8_id])
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0070sha(self):
-        '''
-        Test Sha.
-        '''
-        cursor = DB.cursor()
+        'Test Sha'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            sha1, = self.sha.create([{
+                        'sha': 'Test',
+                        }])
+            self.assert_(sha1)
+            self.assertEqual(sha1.sha,
+                '640ab2bae07bedc4c163f679a746f7ab7fb5d1fa')
 
-        sha1_id = self.sha.create(cursor, USER, {
-            'sha': 'Test',
-            }, CONTEXT)
-        self.assert_(sha1_id)
+            sha = self.sha.search([
+                    ('sha', '=', 'Test'),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha1 = self.sha.read(cursor, USER, sha1_id, ['sha'], CONTEXT)
-        self.assert_(sha1['sha'] == '640ab2bae07bedc4c163f679a746f7ab7fb5d1fa')
+            sha = self.sha.search([
+                    ('sha', '=', 'Foo'),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '=', 'Test'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', '=', None),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '=', 'Foo'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', '!=', 'Test'),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', '!=', 'Foo'),
+                    ])
+            self.assert_(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '!=', 'Test'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', '!=', None),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '!=', 'Foo'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'in', ['Test']),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '!=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'in', ['Foo']),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'in', ['Test']),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'in', [None]),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'in', ['Foo']),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'in', []),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'not in', ['Test']),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'not in', ['Foo']),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not in', ['Test']),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'not in', [None]),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not in', ['Foo']),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'not in', []),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'like', 'Test'),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'like', 'Foo'),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'like', 'Test'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'ilike', 'Test'),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'like', 'Foo'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'ilike', 'foo'),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'ilike', 'Test'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', 'not like', 'Test'),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'ilike', 'foo'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'not like', 'Foo'),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not like', 'Test'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            sha = self.sha.search([
+                    ('sha', 'not ilike', 'foo'),
+                    ])
+            self.assertEqual(sha, [sha1])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not like', 'Foo'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha2, = self.sha.create([{
+                        'sha': None,
+                        }])
+            self.assert_(sha2)
+            self.assertEqual(sha2.sha, None)
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not ilike', 'foo'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id])
+            sha = self.sha.search([
+                    ('sha', '=', None),
+                    ])
+            self.assertEqual(sha, [sha2])
 
-        sha2_id = self.sha.create(cursor, USER, {
-            'sha': False,
-            }, CONTEXT)
-        self.assert_(sha2_id)
+            sha = self.sha.search([
+                    ('sha', 'in', [None, 'Test']),
+                    ])
+            self.assertEqual(sha, [sha1, sha2])
 
-        sha2 = self.sha.read(cursor, USER, sha2_id, ['sha'], CONTEXT)
-        self.assert_(sha2['sha'] == None)
+            sha = self.sha.search([
+                    ('sha', 'not in', [None, 'Test']),
+                    ])
+            self.assertEqual(sha, [])
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha2_id])
+            sha3, = self.sha.create([{}])
+            self.assert_(sha3)
+            self.assertEqual(sha3.sha, None)
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'in', [False, 'Test']),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha1_id, sha2_id])
+            sha4, = self.sha_default.create([{}])
+            self.assert_(sha4)
+            self.assertEqual(sha4.sha,
+                'ba79baeb9f10896a46ae74715271b7f586e74640')
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', 'not in', [False, 'Test']),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [])
+            self.sha.write([sha1], {
+                    'sha': None,
+                    })
+            self.assertEqual(sha1.sha, None)
 
-        sha3_id = self.sha.create(cursor, USER, {}, CONTEXT)
-        self.assert_(sha3_id)
+            self.sha.write([sha2], {
+                    'sha': 'Test',
+                    })
+            self.assertEqual(sha2.sha,
+                '640ab2bae07bedc4c163f679a746f7ab7fb5d1fa')
 
-        sha3 = self.sha.read(cursor, USER, sha3_id, ['sha'], CONTEXT)
-        self.assert_(sha3['sha'] == None)
+            self.assertRaises(Exception, self.sha_required.create, [{}])
+            transaction.cursor.rollback()
 
-        sha4_id = self.sha_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(sha4_id)
+            sha5, = self.sha_required.create([{
+                        'sha': 'Test',
+                        }])
+            self.assert_(sha5)
 
-        sha4 = self.sha_default.read(cursor, USER, sha4_id, ['sha'], CONTEXT)
-        self.assert_(sha4['sha'] == 'ba79baeb9f10896a46ae74715271b7f586e74640')
-
-        self.sha.write(cursor, USER, sha1_id, {
-            'sha': False,
-            }, CONTEXT)
-        sha1 = self.sha.read(cursor, USER, sha1_id, ['sha'], CONTEXT)
-        self.assert_(sha1['sha'] == None)
-
-        self.sha.write(cursor, USER, sha2_id, {
-            'sha': 'Test',
-            }, CONTEXT)
-        sha2 = self.sha.read(cursor, USER, sha2_id, ['sha'], CONTEXT)
-        self.assert_(sha2['sha'] == '640ab2bae07bedc4c163f679a746f7ab7fb5d1fa')
-
-        self.failUnlessRaises(Exception, self.sha_required.create, cursor,
-                USER, {}, CONTEXT)
-        cursor.rollback()
-
-        sha5_id = self.sha_required.create(cursor, USER, {
-            'sha': 'Test',
-            }, CONTEXT)
-        self.assert_(sha5_id)
-
-        sha6_id = self.sha.create(cursor, USER, {
-            'sha': u'é',
-            }, CONTEXT)
-        self.assert_(sha6_id)
-
-        sha6 = self.sha.read(cursor, USER, sha6_id, ['sha'], CONTEXT)
-        self.assert_(sha6['sha'] ==
+            sha6, = self.sha.create([{
+                        'sha': u'é',
+                        }])
+            self.assert_(sha6)
+            self.assertEqual(sha6.sha,
                 u'bf15be717ac1b080b4f1c456692825891ff5073d')
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '=', u'é'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha6_id])
+            sha = self.sha.search([
+                    ('sha', '=', u'é'),
+                    ])
+            self.assertEqual(sha, [sha6])
 
-        self.sha.write(cursor, USER, sha6_id, {
-            'sha': 'é',
-            }, CONTEXT)
-        sha6 = self.sha.read(cursor, USER, sha6_id, ['sha'], CONTEXT)
-        self.assert_(sha6['sha'] ==
+            self.sha.write([sha6], {
+                    'sha': 'é',
+                    })
+            self.assertEqual(sha6.sha,
                 u'bf15be717ac1b080b4f1c456692825891ff5073d')
 
-        sha_ids = self.sha.search(cursor, USER, [
-            ('sha', '=', 'é'),
-            ], 0, None, None, CONTEXT)
-        self.assert_(sha_ids == [sha6_id])
+            sha = self.sha.search([
+                    ('sha', '=', 'é'),
+                    ])
+            self.assertEqual(sha, [sha6])
 
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0080date(self):
-        '''
-        Test Date.
-        '''
-        cursor = DB.cursor()
+        'Test Date'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            today = datetime.date(2009, 1, 1)
+            tomorrow = today + datetime.timedelta(1)
+            yesterday = today - datetime.timedelta(1)
+            default_date = datetime.date(2000, 1, 1)
 
-        today = datetime.date(2009, 1, 1)
-        tomorrow = today + datetime.timedelta(1)
-        yesterday = today - datetime.timedelta(1)
-        default_date = datetime.date(2000, 1, 1)
+            date1, = self.date.create([{
+                        'date': today,
+                        }])
+            self.assert_(date1)
+            self.assertEqual(date1.date, today)
 
-        date1_id = self.date.create(cursor, USER, {
-            'date': today,
-            }, CONTEXT)
-        self.assert_(date1_id)
+            dates = self.date.search([
+                    ('date', '=', today),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date1 = self.date.read(cursor, USER, date1_id, ['date'], CONTEXT)
-        self.assert_(date1['date'] == today)
+            dates = self.date.search([
+                    ('date', '=', tomorrow),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '=', None),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '!=', today),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '!=', tomorrow),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '!=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '!=', None),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '!=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', 'in', [today]),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '!=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', 'in', [tomorrow]),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'in', [today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', 'in', [None]),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'in', [tomorrow]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', 'in', []),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', 'not in', [today]),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', 'not in', [tomorrow]),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'not in', [today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', 'not in', [None]),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'not in', [tomorrow]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', 'not in', []),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'not in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '<', tomorrow),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'not in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '<', yesterday),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '<', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '<', today),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '<', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '<=', today),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '<', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '<=', yesterday),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '<=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '<=', tomorrow),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '<=', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '>', tomorrow),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '<=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '>', yesterday),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '>', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '>', today),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '>', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '>=', tomorrow),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '>', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '>=', yesterday),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '>=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            dates = self.date.search([
+                    ('date', '>=', today),
+                    ])
+            self.assertEqual(dates, [date1])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '>=', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            date2, = self.date.create([{
+                        'date': yesterday,
+                        }])
+            self.assert_(date2)
+            self.assertEqual(date2.date, yesterday)
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '>=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id])
+            dates = self.date.search([
+                    ('date', '=', yesterday),
+                    ])
+            self.assertEqual(dates, [date2])
 
-        date2_id = self.date.create(cursor, USER, {
-            'date': yesterday,
-            }, CONTEXT)
-        self.assert_(date2_id)
+            dates = self.date.search([
+                    ('date', 'in', [yesterday, today]),
+                    ])
+            self.assertEqual(dates, [date1, date2])
 
-        date2 = self.date.read(cursor, USER, date2_id, ['date'], CONTEXT)
-        self.assert_(date2['date'] == yesterday)
+            dates = self.date.search([
+                    ('date', 'not in', [yesterday, today]),
+                    ])
+            self.assertEqual(dates, [])
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', '=', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date2_id])
+            date3, = self.date.create([{}])
+            self.assert_(date3)
+            self.assertEqual(date3.date, None)
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'in', [yesterday, today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [date1_id, date2_id])
+            date4, = self.date_default.create([{}])
+            self.assert_(date4)
+            self.assertEqual(date4.date, default_date)
 
-        date_ids = self.date.search(cursor, USER, [
-            ('date', 'not in', [yesterday, today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(date_ids == [])
+            self.date.write([date1], {
+                    'date': yesterday,
+                    })
+            self.assertEqual(date1.date, yesterday)
 
-        date3_id = self.date.create(cursor, USER, {}, CONTEXT)
-        self.assert_(date3_id)
+            self.date.write([date2], {
+                    'date': today,
+                    })
+            self.assertEqual(date2.date, today)
 
-        date3 = self.date.read(cursor, USER, date3_id, ['date'], CONTEXT)
-        self.assert_(date3['date'] == None)
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': 'test',
+                        }])
 
-        date4_id = self.date_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(date4_id)
-
-        date4 = self.date_default.read(cursor, USER, date4_id, ['date'],
-                CONTEXT)
-        self.assert_(date4['date'] == default_date)
-
-        self.date.write(cursor, USER, date1_id, {
-            'date': yesterday,
-            }, CONTEXT)
-        date1 = self.date.read(cursor, USER, date1_id, ['date'], CONTEXT)
-        self.assert_(date1['date'] == yesterday)
-
-        self.date.write(cursor, USER, date2_id, {
-            'date': today,
-            }, CONTEXT)
-        date2 = self.date.read(cursor, USER, date2_id, ['date'], CONTEXT)
-        self.assert_(date2['date'] == today)
-
-        self.failUnlessRaises(Exception, self.date.create, cursor, USER, {
-            'date': 'test',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.date.write, cursor, USER,
-                date1_id, {
+            self.assertRaises(Exception, self.date.write, [date1], {
                     'date': 'test',
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.date.create, cursor, USER, {
-            'date': 1,
-            }, CONTEXT)
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': 1,
+                        }])
 
-        self.failUnlessRaises(Exception, self.date.write, cursor, USER,
-                date1_id, {
+            self.assertRaises(Exception, self.date.write, [date1], {
                     'date': 1,
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.date.create, cursor, USER, {
-                'date': datetime.datetime.now(),
-                }, CONTEXT)
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': datetime.datetime.now(),
+                        }])
 
-        self.failUnlessRaises(Exception, self.date.write, cursor, USER,
-                date1_id, {
+            self.assertRaises(Exception, self.date.write, [date1], {
                     'date': datetime.datetime.now(),
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.date.create, cursor, USER, {
-                'date': '2009-13-01',
-                }, CONTEXT)
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': '2009-13-01',
+                        }])
 
-        self.failUnlessRaises(Exception, self.date.write, cursor, USER,
-                date1_id, {
+            self.assertRaises(Exception, self.date.write, [date1], {
                     'date': '2009-02-29',
-                    }, CONTEXT)
+                    })
 
-        date5_id = self.date.create(cursor, USER, {
-            'date': '2009-01-01',
-            }, CONTEXT)
-        self.assert_(date5_id)
-        date5 = self.date.read(cursor, USER, date5_id, ['date'], CONTEXT)
-        self.assert_(date5['date'] == datetime.date(2009, 1, 1))
+            date5, = self.date.create([{
+                        'date': '2009-01-01',
+                        }])
+            self.assert_(date5)
+            self.assertEqual(date5.date, datetime.date(2009, 1, 1))
 
-        self.failUnlessRaises(Exception, self.date_required.create, cursor,
-                USER, {}, CONTEXT)
-        cursor.rollback()
+            self.assertRaises(Exception, self.date_required.create, [{}])
+            transaction.cursor.rollback()
 
-        date6_id = self.date_required.create(cursor, USER, {
-            'date': today,
-            }, CONTEXT)
-        self.assert_(date6_id)
+            date6, = self.date_required.create([{
+                        'date': today,
+                        }])
+            self.assert_(date6)
 
-        date7_id = self.date.create(cursor, USER, {
-            'date': None,
-            }, CONTEXT)
-        self.assert_(date7_id)
+            date7, = self.date.create([{
+                        'date': None,
+                        }])
+            self.assert_(date7)
 
-        date8_id = self.date.create(cursor, USER, {
-            'date': False,
-            }, CONTEXT)
-        self.assert_(date8_id)
+            date8, = self.date.create([{
+                        'date': None,
+                        }])
+            self.assert_(date8)
 
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0090datetime(self):
-        '''
-        Test DateTime.
-        '''
-        cursor = DB.cursor()
+        'Test DateTime'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            today = datetime.datetime(2009, 1, 1, 12, 0, 0)
+            tomorrow = today + datetime.timedelta(1)
+            yesterday = today - datetime.timedelta(1)
+            default_datetime = datetime.datetime(2000, 1, 1, 12, 0, 0)
 
-        today = datetime.datetime(2009, 1, 1, 12, 0, 0)
-        tomorrow = today + datetime.timedelta(1)
-        yesterday = today - datetime.timedelta(1)
-        default_datetime = datetime.datetime(2000, 1, 1, 12, 0, 0)
+            datetime1, = self.datetime.create([{
+                        'datetime': today,
+                        }])
+            self.assert_(datetime1)
+            self.assertEqual(datetime1.datetime, today)
 
-        datetime1_id = self.datetime.create(cursor, USER, {
-            'datetime': today,
-            }, CONTEXT)
-        self.assert_(datetime1_id)
+            datetimes = self.datetime.search([
+                    ('datetime', '=', today),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime1 = self.datetime.read(cursor, USER, datetime1_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime1['datetime'] == today)
+            datetimes = self.datetime.search([
+                    ('datetime', '=', tomorrow),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '=', None),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '!=', today),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '!=', tomorrow),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '!=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '!=', None),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '!=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', 'in', [today]),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '!=', False),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', 'in', [tomorrow]),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'in', [today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', 'in', [None]),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'in', [tomorrow]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', 'in', []),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', 'not in', [today]),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', 'not in', [tomorrow]),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'not in', [today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', 'not in', [None]),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'not in', [tomorrow]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', 'not in', []),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'not in', [False]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '<', tomorrow),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'not in', []),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '<', yesterday),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '<', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '<', today),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '<', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '<=', today),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '<', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '<=', yesterday),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '<=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '<=', tomorrow),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '<=', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '>', tomorrow),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '<=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '>', yesterday),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '>', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '>', today),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '>', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '>=', tomorrow),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '>', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '>=', yesterday),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '>=', tomorrow),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            datetimes = self.datetime.search([
+                    ('datetime', '>=', today),
+                    ])
+            self.assertEqual(datetimes, [datetime1])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '>=', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetime2, = self.datetime.create([{
+                        'datetime': yesterday,
+                        }])
+            self.assert_(datetime2)
+            self.assertEqual(datetime2.datetime, yesterday)
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '>=', today),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id])
+            datetimes = self.datetime.search([
+                    ('datetime', '=', yesterday),
+                    ])
+            self.assertEqual(datetimes, [datetime2])
 
-        datetime2_id = self.datetime.create(cursor, USER, {
-            'datetime': yesterday,
-            }, CONTEXT)
-        self.assert_(datetime2_id)
+            datetimes = self.datetime.search([
+                    ('datetime', 'in', [yesterday, today]),
+                    ])
+            self.assertEqual(datetimes, [datetime1, datetime2])
 
-        datetime2 = self.datetime.read(cursor, USER, datetime2_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime2['datetime'] == yesterday)
+            datetimes = self.datetime.search([
+                    ('datetime', 'not in', [yesterday, today]),
+                    ])
+            self.assertEqual(datetimes, [])
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', '=', yesterday),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime2_id])
+            datetime3, = self.datetime.create([{}])
+            self.assert_(datetime3)
+            self.assertEqual(datetime3.datetime, None)
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'in', [yesterday, today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [datetime1_id, datetime2_id])
+            datetime4, = self.datetime_default.create([{}])
+            self.assert_(datetime4)
+            self.assertEqual(datetime4.datetime, default_datetime)
 
-        datetime_ids = self.datetime.search(cursor, USER, [
-            ('datetime', 'not in', [yesterday, today]),
-            ], 0, None, None, CONTEXT)
-        self.assert_(datetime_ids == [])
+            self.datetime.write([datetime1], {
+                    'datetime': yesterday,
+                    })
+            self.assertEqual(datetime1.datetime, yesterday)
 
-        datetime3_id = self.datetime.create(cursor, USER, {}, CONTEXT)
-        self.assert_(datetime3_id)
+            self.datetime.write([datetime2], {
+                    'datetime': today,
+                    })
+            self.assertEqual(datetime2.datetime, today)
 
-        datetime3 = self.datetime.read(cursor, USER, datetime3_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime3['datetime'] == None)
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': 'test',
+                        }])
 
-        datetime4_id = self.datetime_default.create(cursor, USER, {}, CONTEXT)
-        self.assert_(datetime4_id)
-
-        datetime4 = self.datetime_default.read(cursor, USER, datetime4_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime4['datetime'] == default_datetime)
-
-        self.datetime.write(cursor, USER, datetime1_id, {
-            'datetime': yesterday,
-            }, CONTEXT)
-        datetime1 = self.datetime.read(cursor, USER, datetime1_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime1['datetime'] == yesterday)
-
-        self.datetime.write(cursor, USER, datetime2_id, {
-            'datetime': today,
-            }, CONTEXT)
-        datetime2 = self.datetime.read(cursor, USER, datetime2_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime2['datetime'] == today)
-
-        self.failUnlessRaises(Exception, self.datetime.create, cursor, USER, {
-            'datetime': 'test',
-            }, CONTEXT)
-
-        self.failUnlessRaises(Exception, self.datetime.write, cursor, USER,
-                datetime1_id, {
+            self.assertRaises(Exception, self.datetime.write, [datetime1],
+                {
                     'datetime': 'test',
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.datetime.create, cursor, USER, {
-            'datetime': 1,
-            }, CONTEXT)
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': 1,
+                        }])
 
-        self.failUnlessRaises(Exception, self.datetime.write, cursor, USER,
-                datetime1_id, {
+            self.assertRaises(Exception, self.datetime.write, [datetime1],
+                {
                     'datetime': 1,
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.datetime.create, cursor, USER, {
-            'datetime': datetime.date.today(),
-            }, CONTEXT)
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': datetime.date.today(),
+                        }])
 
-        self.failUnlessRaises(Exception, self.datetime.write, cursor, USER,
-                datetime1_id, {
+            self.assertRaises(Exception, self.datetime.write, [datetime1],
+                {
                     'datetime': datetime.date.today(),
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.datetime.create, cursor, USER, {
-            'datetime': '2009-13-01 12:30:00',
-            }, CONTEXT)
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': '2009-13-01 12:30:00',
+                        }])
 
-        self.failUnlessRaises(Exception, self.datetime.write, cursor, USER,
-                datetime1_id, {
+            self.assertRaises(Exception, self.datetime.write, [datetime1],
+                {
                     'datetime': '2009-02-29 12:30:00',
-                    }, CONTEXT)
+                    })
 
-        self.failUnlessRaises(Exception, self.datetime.write, cursor, USER,
-                datetime1_id, {
+            self.assertRaises(Exception, self.datetime.write, [datetime1],
+                {
                     'datetime': '2009-01-01 25:00:00',
-                    }, CONTEXT)
+                    })
 
-        datetime5_id = self.datetime.create(cursor, USER, {
-            'datetime': '2009-01-01 12:00:00',
-            }, CONTEXT)
-        self.assert_(datetime5_id)
-        datetime5 = self.datetime.read(cursor, USER, datetime5_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime5['datetime'] == datetime.datetime(2009, 1, 1, 12,
-            0, 0))
+            datetime5, = self.datetime.create([{
+                    'datetime': '2009-01-01 12:00:00',
+                    }])
+            self.assert_(datetime5)
+            self.assertEqual(datetime5.datetime,
+                datetime.datetime(2009, 1, 1, 12, 0, 0))
 
-        self.failUnlessRaises(Exception, self.datetime_required.create, cursor,
-                USER, {}, CONTEXT)
-        cursor.rollback()
+            self.assertRaises(Exception, self.datetime_required.create, [{}])
+            transaction.cursor.rollback()
 
-        datetime6_id = self.datetime_required.create(cursor, USER, {
-            'datetime': today,
-            }, CONTEXT)
-        self.assert_(datetime6_id)
+            datetime6, = self.datetime_required.create([{
+                        'datetime': today,
+                        }])
+            self.assert_(datetime6)
 
-        datetime7_id = self.datetime.create(cursor, USER, {
-            'datetime': None,
-            }, CONTEXT)
-        self.assert_(datetime7_id)
+            datetime7, = self.datetime.create([{
+                        'datetime': None,
+                        }])
+            self.assert_(datetime7)
 
-        datetime8_id = self.datetime.create(cursor, USER, {
-            'datetime': False,
-            }, CONTEXT)
-        self.assert_(datetime8_id)
+            datetime8, = self.datetime.create([{
+                        'datetime': None,
+                        }])
+            self.assert_(datetime8)
 
-        datetime9_id = self.datetime.create(cursor, USER, {
-            'datetime': today.replace(microsecond=1),
-            }, CONTEXT)
-        self.assert_(datetime9_id)
-        datetime9 = self.datetime.read(cursor, USER, datetime9_id,
-                ['datetime'], CONTEXT)
-        self.assert_(datetime9['datetime'] == today)
+            datetime9, = self.datetime.create([{
+                        'datetime': today.replace(microsecond=1),
+                        }])
+            self.assert_(datetime9)
+            self.assertEqual(datetime9.datetime, today)
 
-        cursor.rollback()
-        cursor.close()
+            # Test format
+            self.assert_(self.datetime_format.create([{
+                            'datetime': datetime.datetime(2009, 1, 1, 12, 30),
+                            }]))
+            self.assertRaises(Exception, self.datetime_format.create, [{
+                        'datetime': datetime.datetime(2009, 1, 1, 12, 30, 25),
+                        }])
+
+            transaction.cursor.rollback()
+
+    def test0100time(self):
+        'Test Time'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            pre_evening = datetime.time(16, 30)
+            evening = datetime.time(18, 45, 3)
+            night = datetime.time(20, 00)
+            default_time = datetime.time(16, 30)
+
+            time1, = self.time.create([{
+                        'time': evening,
+                        }])
+            self.assert_(time1)
+            self.assertEqual(time1.time, evening)
+
+            times = self.time.search([
+                    ('time', '=', evening),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '=', night),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '=', None),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '!=', evening),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '!=', night),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '!=', None),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', 'in', [evening]),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', 'in', [night]),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', 'in', [None]),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', 'in', []),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', 'not in', [evening]),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', 'not in', [night]),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', 'not in', [None]),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', 'not in', []),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '<', night),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '<', pre_evening),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '<', evening),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '<=', evening),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '<=', pre_evening),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '<=', night),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '>', night),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '>', pre_evening),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '>', evening),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '>=', night),
+                    ])
+            self.assertEqual(times, [])
+
+            times = self.time.search([
+                    ('time', '>=', pre_evening),
+                    ])
+            self.assertEqual(times, [time1])
+
+            times = self.time.search([
+                    ('time', '>=', evening),
+                    ])
+            self.assertEqual(times, [time1])
+
+            time2, = self.time.create([{
+                        'time': pre_evening,
+                        }])
+            self.assert_(time2)
+            self.assertEqual(time2.time, pre_evening)
+
+            times = self.time.search([
+                    ('time', '=', pre_evening),
+                    ])
+            self.assertEqual(times, [time2])
+
+            times = self.time.search([
+                    ('time', 'in', [pre_evening, evening]),
+                    ])
+            self.assertEqual(times, [time1, time2])
+
+            times = self.time.search([
+                    ('time', 'not in', [pre_evening, evening]),
+                    ])
+            self.assertEqual(times, [])
+
+            time3, = self.time.create([{}])
+            self.assert_(time3)
+            self.assertEqual(time3.time, None)
+
+            time4, = self.time_default.create([{}])
+            self.assert_(time4)
+            self.assertEqual(time4.time, default_time)
+
+            self.time.write([time1], {
+                    'time': pre_evening,
+                    })
+            self.assertEqual(time1.time, pre_evening)
+
+            self.time.write([time2], {
+                    'time': evening,
+                    })
+            self.assertEqual(time2.time, evening)
+
+            self.assertRaises(Exception, self.time.create, [{
+                        'time': 'test',
+                        }])
+
+            self.assertRaises(Exception, self.time.write, [time1],
+                {
+                    'time': 'test',
+                    })
+
+            self.assertRaises(Exception, self.time.create, [{
+                    'time': 1,
+                    }])
+
+            self.assertRaises(Exception, self.time.write, [time1],
+                {
+                    'time': 1,
+                    })
+
+            self.assertRaises(Exception, self.time.write, [time1],
+                {
+                    'time': '25:00:00',
+                    })
+
+            time5, = self.time.create([{
+                        'time': '12:00:00',
+                        }])
+            self.assert_(time5)
+            self.assertEqual(time5.time, datetime.time(12, 0))
+
+            self.assertRaises(Exception, self.time_required.create, [{}])
+            transaction.cursor.rollback()
+
+            time6, = self.time_required.create([{
+                        'time': evening,
+                        }])
+            self.assert_(time6)
+
+            time7, = self.time.create([{
+                        'time': None,
+                        }])
+            self.assert_(time7)
+
+            time9, = self.time.create([{
+                        'time': evening.replace(microsecond=1),
+                        }])
+            self.assert_(time9)
+            self.assertEqual(time9.time, evening)
+
+            # Test format
+            self.assert_(self.time_format.create([{
+                        'time': datetime.time(12, 30),
+                        }]))
+            self.assertRaises(Exception, self.time_format.create, [{
+                    'time': datetime.time(12, 30, 25),
+                    }])
+
+            transaction.cursor.rollback()
+
+    def test0110one2one(self):
+        'Test One2One'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            target1, = self.one2one_target.create([{
+                        'name': 'target1',
+                        }])
+            one2one1, = self.one2one.create([{
+                        'name': 'origin1',
+                        'one2one': target1.id,
+                        }])
+            self.assert_(one2one1)
+            self.assertEqual(one2one1.one2one, target1)
+
+            self.assertEqual(self.one2one.read([one2one1.id],
+                    ['one2one.name'])[0]['one2one.name'], 'target1')
+
+            one2ones = self.one2one.search([
+                    ('one2one', '=', 'target1'),
+                    ])
+            self.assertEqual(one2ones, [one2one1])
+
+            one2ones = self.one2one.search([
+                    ('one2one', '!=', 'target1'),
+                    ])
+            self.assertEqual(one2ones, [])
+
+            one2ones = self.one2one.search([
+                    ('one2one', 'in', [target1.id]),
+                    ])
+            self.assertEqual(one2ones, [one2one1])
+
+            one2ones = self.one2one.search([
+                    ('one2one', 'in', [0]),
+                    ])
+            self.assertEqual(one2ones, [])
+
+            one2ones = self.one2one.search([
+                    ('one2one', 'not in', [target1.id]),
+                    ])
+            self.assertEqual(one2ones, [])
+
+            one2ones = self.one2one.search([
+                    ('one2one', 'not in', [0]),
+                    ])
+            self.assertEqual(one2ones, [one2one1])
+
+            one2ones = self.one2one.search([
+                    ('one2one.name', '=', 'target1'),
+                    ])
+            self.assertEqual(one2ones, [one2one1])
+
+            one2ones = self.one2one.search([
+                    ('one2one.name', '!=', 'target1'),
+                    ])
+            self.assertEqual(one2ones, [])
+
+            one2one2, = self.one2one.create([{
+                        'name': 'origin2',
+                        }])
+            self.assert_(one2one2)
+            self.assertEqual(one2one2.one2one, None)
+
+            one2ones = self.one2one.search([
+                    ('one2one', '=', None),
+                    ])
+            self.assertEqual(one2ones, [one2one2])
+
+            target2, = self.one2one_target.create([{
+                        'name': 'target2',
+                        }])
+            self.one2one.write([one2one2], {
+                    'one2one': target2.id,
+                    })
+            self.assertEqual(one2one2.one2one, target2)
+
+            self.one2one.write([one2one2], {
+                    'one2one': None,
+                    })
+            self.assertEqual(one2one2.one2one, None)
+
+            self.assertRaises(Exception, self.one2one.create, [{
+                        'name': 'one2one3',
+                        'one2one': target1.id,
+                        }])
+            transaction.cursor.rollback()
+
+            self.assertRaises(Exception, self.one2one.write, [one2one2], {
+                    'one2one': target1.id,
+                    })
+            transaction.cursor.rollback()
+
+            self.assertRaises(Exception, self.one2one_required.create, [{
+                        'name': 'one2one3',
+                        }])
+            transaction.cursor.rollback()
+
+            target3, = self.one2one_target.create([{
+                        'name': 'target3',
+                        }])
+
+            one2one3, = self.one2one_required.create([{
+                        'name': 'one2one3',
+                        'one2one': target3.id,
+                        }])
+            self.assert_(one2one3)
+
+            target4, = self.one2one_target.create([{
+                        'name': 'target4',
+                        }])
+            self.assertRaises(Exception, self.one2one_domain.create, [{
+                        'name': 'one2one4',
+                        'one2one': target4.id,
+                        }])
+            transaction.cursor.rollback()
+
+            target5, = self.one2one_target.create([{
+                        'name': 'domain',
+                        }])
+            one2one5, = self.one2one_domain.create([{
+                        'name': 'one2one5',
+                        'one2one': target5.id,
+                        }])
+
+            transaction.cursor.rollback()
+
+    def test0120one2many(self):
+        'Test One2Many'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            for one2many, one2many_target in (
+                    (self.one2many, self.one2many_target),
+                    (self.one2many_reference, self.one2many_reference_target),
+                    ):
+                one2many1, = one2many.create([{
+                            'name': 'origin1',
+                            'targets': [
+                                ('create', [{
+                                            'name': 'target1',
+                                            }]),
+                                ],
+                            }])
+                self.assert_(one2many1)
+
+                self.assertEqual(len(one2many1.targets), 1)
+                target1, = one2many1.targets
+
+                # Try with target1 stored in cache
+                target1 = one2many_target(target1.id)
+                target1.origin
+                one2many1 = one2many(one2many1)
+                self.assertEqual(one2many1.targets, (target1,))
+
+                one2manys = one2many.search([
+                        ('targets', '=', 'target1'),
+                        ])
+                self.assertEqual(one2manys, [one2many1])
+
+                one2manys = one2many.search([
+                        ('targets', '!=', 'target1'),
+                        ])
+                self.assertEqual(one2manys, [])
+
+                one2manys = one2many.search([
+                        ('targets', 'in', [target1.id]),
+                        ])
+                self.assertEqual(one2manys, [one2many1])
+
+                one2manys = one2many.search([
+                        ('targets', 'in', [0]),
+                        ])
+                self.assertEqual(one2manys, [])
+
+                one2manys = one2many.search([
+                        ('targets', 'not in', (target1.id,)),
+                        ])
+                self.assertEqual(one2manys, [])
+
+                one2manys = one2many.search([
+                        ('targets', 'not in', [0]),
+                        ])
+                self.assertEqual(one2manys, [one2many1])
+
+                one2manys = one2many.search([
+                        ('targets.name', '=', 'target1'),
+                        ])
+                self.assertEqual(one2manys, [one2many1])
+
+                one2manys = one2many.search([
+                        ('targets.name', '!=', 'target1'),
+                        ])
+                self.assertEqual(one2manys, [])
+
+                one2many2, = one2many.create([{
+                            'name': 'origin2',
+                            }])
+                self.assert_(one2many2)
+
+                self.assertEqual(one2many2.targets, ())
+
+                one2manys = one2many.search([
+                        ('targets', '=', None),
+                        ])
+                self.assertEqual(one2manys, [one2many2])
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('write', [target1.id], {
+                                    'name': 'target1bis',
+                                    }),
+                            ],
+                        })
+                self.assertEqual(target1.name, 'target1bis')
+
+                target2, = one2many_target.create([{
+                            'name': 'target2',
+                            }])
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('add', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(one2many1.targets,
+                    (target1, target2))
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('remove', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(one2many1.targets, (target1,))
+                target2, = one2many_target.search([
+                        ('id', '=', target2.id),
+                        ])
+                self.assert_(target2)
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('remove', [target1.id]),
+                            ],
+                        })
+                self.assertEqual(one2many1.targets, ())
+                targets = one2many_target.search([
+                        ('id', 'in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(targets, [target1, target2])
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('add', [target1.id, target2.id]),
+                            ],
+                        })
+                self.assertEqual(one2many1.targets,
+                    (target1, target2))
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('copy', [target1.id], {'name': 'copy1'}),
+                            ],
+                        })
+                targets = one2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 1)
+                self.assertEqual(targets[0].name, 'copy1')
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('copy', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(len(one2many1.targets), 4)
+                targets = one2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 2)
+                names = set([target.name for target in targets])
+                self.assertEqual(names, set(('copy1', 'target2')))
+
+                copy_ids = [target.id for target in targets]
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('delete', [target2.id] + copy_ids),
+                            ],
+                        })
+                self.assertEqual(one2many1.targets, (target1,))
+                targets = one2many_target.search([
+                        ('id', '=', target2.id),
+                        ])
+                self.assertEqual(targets, [])
+
+                transaction.cursor.rollback()
+
+            self.assertRaises(Exception, self.one2many_required.create, [{
+                        'name': 'origin3',
+                        }])
+            transaction.cursor.rollback()
+
+            origin3_id, = self.one2many_required.create([{
+                        'name': 'origin3',
+                        'targets': [
+                            ('create', [{
+                                        'name': 'target3',
+                                        }]),
+                            ],
+                        }])
+            self.assert_(origin3_id)
+
+            self.one2many_size.create([{
+                        'targets': [('create', [{}])] * 3,
+                        }])
+            self.assertRaises(Exception, self.one2many_size.create, [{
+                        'targets': [('create', [{}])] * 4,
+                        }])
+            self.one2many_size_pyson.create([{
+                        'limit': 4,
+                        'targets': [('create', [{}])] * 4,
+                        }])
+            self.assertRaises(Exception, self.one2many_size_pyson.create, [{
+                        'limit': 2,
+                        'targets': [('create', [{}])] * 4,
+                        }])
+
+            transaction.cursor.rollback()
+
+    def test0130many2many(self):
+        'Test Many2Many'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            for many2many, many2many_target in (
+                    (self.many2many, self.many2many_target),
+                    (self.many2many_reference,
+                        self.many2many_reference_target),
+                    ):
+                many2many1, = many2many.create([{
+                            'name': 'origin1',
+                            'targets': [
+                                ('create', [{
+                                            'name': 'target1',
+                                            }]),
+                                ],
+                            }])
+                self.assert_(many2many1)
+
+                self.assertEqual(len(many2many1.targets), 1)
+                target1, = many2many1.targets
+
+                many2manys = many2many.search([
+                        ('targets', '=', 'target1'),
+                        ])
+                self.assertEqual(many2manys, [many2many1])
+
+                many2manys = many2many.search([
+                        ('targets', '!=', 'target1'),
+                        ])
+                self.assertEqual(many2manys, [])
+
+                many2manys = many2many.search([
+                        ('targets', 'in', [target1.id]),
+                        ])
+                self.assertEqual(many2manys, [many2many1])
+
+                many2manys = many2many.search([
+                        ('targets', 'in', [0]),
+                        ])
+                self.assertEqual(many2manys, [])
+
+                many2manys = many2many.search([
+                        ('targets', 'not in', [target1.id]),
+                        ])
+                self.assertEqual(many2manys, [])
+
+                many2manys = many2many.search([
+                        ('targets', 'not in', [0]),
+                        ])
+                self.assertEqual(many2manys, [many2many1])
+
+                many2manys = many2many.search([
+                        ('targets.name', '=', 'target1'),
+                        ])
+                self.assertEqual(many2manys, [many2many1])
+
+                many2manys = many2many.search([
+                        ('targets.name', '!=', 'target1'),
+                        ])
+                self.assertEqual(many2manys, [])
+
+                many2many2, = many2many.create([{
+                            'name': 'origin2',
+                            }])
+                self.assert_(many2many2)
+
+                self.assertEqual(many2many2.targets, ())
+
+                many2manys = many2many.search([
+                        ('targets', '=', None),
+                        ])
+                self.assertEqual(many2manys, [many2many2])
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('write', [target1.id], {
+                                    'name': 'target1bis',
+                                    }),
+                            ],
+                        })
+                self.assertEqual(target1.name, 'target1bis')
+
+                target2, = many2many_target.create([{
+                            'name': 'target2',
+                            }])
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('add', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(many2many1.targets,
+                    (target1, target2))
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('remove', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(many2many1.targets, (target1,))
+                target2, = many2many_target.search([
+                        ('id', '=', target2.id),
+                        ])
+                self.assert_(target2)
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('remove', [target1.id]),
+                            ],
+                        })
+                self.assertEqual(many2many1.targets, ())
+                targets = many2many_target.search([
+                        ('id', 'in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(targets, [target1, target2])
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('add', [target1.id, target2.id]),
+                            ],
+                        })
+                self.assertEqual(many2many1.targets,
+                    (target1, target2))
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('copy', [target1.id], {'name': 'copy1'}),
+                            ],
+                        })
+                targets = many2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 1)
+                self.assertEqual(targets[0].name, 'copy1')
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('copy', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(len(many2many1.targets), 4)
+                targets = many2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 2)
+                names = set([target.name for target in targets])
+                self.assertEqual(names, set(('copy1', 'target2')))
+
+                copy_ids = [target.id for target in targets]
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('delete', [target2.id] + copy_ids),
+                            ],
+                        })
+                self.assertEqual(many2many1.targets, (target1,))
+                targets = many2many_target.search([
+                        ('id', '=', target2.id),
+                        ])
+                self.assertEqual(targets, [])
+
+                transaction.cursor.rollback()
+
+            self.assertRaises(Exception, self.many2many_required.create, [{
+                        'name': 'origin3',
+                        }])
+            transaction.cursor.rollback()
+
+            origin3_id, = self.many2many_required.create([{
+                        'name': 'origin3',
+                        'targets': [
+                            ('create', [{
+                                        'name': 'target3',
+                                        }]),
+                            ],
+                        }])
+            self.assert_(origin3_id)
+
+            size_targets = self.many2many_size_target.create([{
+                        'name': str(i),
+                        } for i in range(6)])
+
+            transaction.cursor.rollback()
+
+    def test0140reference(self):
+        'Test Reference'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            target1, = self.reference_target.create([{
+                        'name': 'target1',
+                        }])
+            reference1, = self.reference.create([{
+                        'name': 'reference1',
+                        'reference': str(target1),
+                        }])
+            self.assert_(reference1)
+
+            self.assertEqual(reference1.reference, target1)
+
+            references = self.reference.search([
+                    ('reference', '=', str(target1)),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference', '=', (target1.__name__, target1.id)),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference', '=', [target1.__name__, target1.id]),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference.name', '=', 'target1',
+                        'test.reference.target'),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference', '!=', str(target1)),
+                    ])
+            self.assertEqual(references, [])
+
+            references = self.reference.search([
+                    ('reference', '!=', str(target1)),
+                    ])
+            self.assertEqual(references, [])
+
+            references = self.reference.search([
+                    ('reference', 'in', [str(target1)]),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference', 'in',
+                        [('test.reference.target', target1.id)]),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference', 'in', [None]),
+                    ])
+            self.assertEqual(references, [])
+
+            references = self.reference.search([
+                    ('reference', 'not in', [str(target1)]),
+                    ])
+            self.assertEqual(references, [])
+
+            references = self.reference.search([
+                    ('reference', 'not in',
+                        [('test.reference.target', target1.id)]),
+                    ])
+            self.assertEqual(references, [])
+
+            references = self.reference.search([
+                    ('reference', 'not in', [None]),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            reference2, = self.reference.create([{
+                        'name': 'reference2',
+                        }])
+            self.assert_(reference2)
+
+            self.assertEqual(reference2.reference, None)
+
+            references = self.reference.search([
+                    ('reference', '=', None),
+                    ])
+            self.assertEqual(references, [reference2])
+
+            target2, = self.reference_target.create([{
+                        'name': 'target2',
+                        }])
+
+            self.reference.write([reference2], {
+                    'reference': str(target2),
+                    })
+            self.assertEqual(reference2.reference, target2)
+
+            self.reference.write([reference2], {
+                    'reference': None,
+                    })
+            self.assertEqual(reference2.reference, None)
+
+            self.reference.write([reference2], {
+                    'reference': ('test.reference.target', target2.id),
+                    })
+            self.assertEqual(reference2.reference, target2)
+
+            reference3, = self.reference.create([{
+                        'name': 'reference3',
+                        'reference': ('test.reference.target', target1.id),
+                        }])
+            self.assert_(reference3)
+
+            self.assertRaises(Exception, self.reference_required.create, [{
+                        'name': 'reference4',
+                        }])
+            transaction.cursor.rollback()
+
+            target4, = self.reference_target.create([{
+                        'name': 'target4_id',
+                        }])
+
+            reference4, = self.reference_required.create([{
+                        'name': 'reference4',
+                        'reference': str(target4),
+                        }])
+            self.assert_(reference4)
+
+            transaction.cursor.rollback()
+
+    def test0150property(self):
+        'Test Property with supported field types'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+
+            # Test Char
+            prop_a, = self.property_.create([{'char': 'Test'}])
+            self.assert_(prop_a)
+            self.assertEqual(prop_a.char, 'Test')
+
+            prop_b, = self.property_.create([{}])
+            self.assert_(prop_b)
+            self.assertEqual(prop_b.char, None)
+
+            prop_c, = self.property_.create([{'char': 'FooBar'}])
+            self.assert_(prop_c)
+            self.assertEqual(prop_c.char, 'FooBar')
+
+            props = self.property_.search([('char', '=', 'Test')])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([('char', '=', None)])
+            self.assertEqual(props, [prop_b])
+
+            props = self.property_.search([('char', '!=', None)])
+            self.assertEqual(props, [prop_a, prop_c])
+
+            props = self.property_.search([('char', 'like', 'Tes%')])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([('char', 'like', '%Bar')])
+            self.assertEqual(props, [prop_c])
+
+            props = self.property_.search([('char', 'not like', 'Tes%')])
+            self.assertEqual(props, [prop_b, prop_c])
+
+            props = self.property_.search([('char', 'ilike', 'tes%')])
+            self.assert_(props, [prop_a])
+
+            props = self.property_.search([('char', 'ilike', '%bar')])
+            self.assertEqual(props, [prop_c])
+
+            props = self.property_.search([('char', 'not ilike', 'tes%')])
+            self.assertEqual(props, [prop_b, prop_c])
+
+            props = self.property_.search([('char', 'in', ['Test'])])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([
+                    ('char', 'in', ['Test', 'FooBar'])])
+            self.assertEqual(props, [prop_a, prop_c])
+
+            props = self.property_.search([
+                    ('char', 'not in', ['Test', 'FooBar'])])
+            self.assertEqual(props, [prop_b])
+
+            # Test default value
+            property_field, = self.model_field.search([
+                    ('model.model', '=', 'test.property'),
+                    ('name', '=', 'char'),
+                    ], limit=1)
+            self.ir_property.create([{
+                        'field': property_field.id,
+                        'value': ',DEFAULT_VALUE',
+                        }])
+
+            prop_d, = self.property_.create([{}])
+            self.assert_(prop_d)
+            self.assertEqual(prop_d.char, 'DEFAULT_VALUE')
+
+            props = self.property_.search([('char', '!=', None)])
+            self.assertEqual(props, [prop_a, prop_c, prop_d])
+
+            self.property_.write([prop_a], {'char': None})
+            self.assertEqual(prop_a.char, None)
+
+            self.property_.write([prop_b], {'char': 'Test'})
+            self.assertEqual(prop_b.char, 'Test')
+
+            transaction.cursor.rollback()
+
+            # Test Many2One
+            char_a, = self.char.create([{'char': 'Test'}])
+            self.assert_(char_a)
+
+            char_b, = self.char.create([{'char': 'FooBar'}])
+            self.assert_(char_b)
+
+            prop_a, = self.property_.create([{'many2one': char_a.id}])
+            self.assert_(prop_a)
+            self.assertEqual(prop_a.many2one, char_a)
+
+            prop_b, = self.property_.create([{'many2one': char_b.id}])
+            self.assert_(prop_b)
+            self.assertEqual(prop_b.many2one, char_b)
+
+            prop_c, = self.property_.create([{}])
+            self.assert_(prop_c)
+            self.assertEqual(prop_c.many2one, None)
+
+            props = self.property_.search([('many2one', '=', char_a.id)])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([('many2one', '!=', None)])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([('many2one', '=', None)])
+            self.assertEqual(props, [prop_c])
+
+            self.assertEqual(prop_a.many2one, char_a)
+
+            props = self.property_.search([
+                    ('many2one', 'in', [char_a.id, char_b.id])])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([
+                    ('many2one', 'not in', [char_a.id, char_b.id])])
+            self.assertEqual(props, [prop_c])
+
+            self.property_.write([prop_b], {'many2one': char_a.id})
+            self.assertEqual(prop_b.many2one, char_a)
+
+            transaction.cursor.rollback()
+
+            # Test Numeric
+            prop_a, = self.property_.create([{'numeric': Decimal('1.1')}])
+            self.assert_(prop_a)
+            self.assertEqual(prop_a.numeric, Decimal('1.1'))
+
+            prop_b, = self.property_.create([{'numeric': Decimal('2.6')}])
+            self.assert_(prop_b)
+            self.assertEqual(prop_b.numeric, Decimal('2.6'))
+
+            prop_c, = self.property_.create([{}])
+            self.assert_(prop_c)
+            self.assertEqual(prop_c.numeric, None)
+
+            props = self.property_.search([('numeric', '!=', None)])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([('numeric', '=', None)])
+            self.assertEqual(props, [prop_c])
+
+            props = self.property_.search([
+                    ('numeric', '=', Decimal('1.1')),
+                    ])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([
+                    ('numeric', '!=', Decimal('1.1'))])
+            self.assertEqual(props, [prop_b, prop_c])
+
+            props = self.property_.search([
+                    ('numeric', '<', Decimal('2.6')),
+                    ])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([
+                    ('numeric', '<=', Decimal('2.6'))])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([
+                    ('numeric', '>', Decimal('1.1')),
+                    ])
+            self.assertEqual(props, [prop_b])
+
+            props = self.property_.search([
+                    ('numeric', '>=', Decimal('1.1'))])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([
+                    ('numeric', 'in', [Decimal('1.1')])])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([
+                    ('numeric', 'in', [Decimal('1.1'), Decimal('2.6')])])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([
+                    ('numeric', 'not in', [Decimal('1.1')])])
+            self.assertEqual(props, [prop_b, prop_c])
+
+            props = self.property_.search([
+                    ('numeric', 'not in', [Decimal('1.1'), Decimal('2.6')])])
+            self.assertEqual(props, [prop_c])
+
+            # Test default value
+            property_field, = self.model_field.search([
+                    ('model.model', '=', 'test.property'),
+                    ('name', '=', 'numeric'),
+                    ], limit=1)
+            self.ir_property.create([{
+                        'field': property_field.id,
+                        'value': ',3.7',
+                        }])
+
+            prop_d, = self.property_.create([{}])
+            self.assert_(prop_d)
+            self.assertEqual(prop_d.numeric, Decimal('3.7'))
+
+            self.property_.write([prop_a], {'numeric': None})
+            self.assertEqual(prop_a.numeric, None)
+
+            self.property_.write([prop_b], {'numeric': Decimal('3.11')})
+            self.assertEqual(prop_b.numeric, Decimal('3.11'))
+
+            transaction.cursor.rollback()
+
+            # Test Selection
+            prop_a, = self.property_.create([{'selection': 'option_a'}])
+            self.assert_(prop_a)
+            self.assertEqual(prop_a.selection, 'option_a')
+
+            prop_b, = self.property_.create([{'selection': 'option_b'}])
+            self.assert_(prop_b)
+            self.assertEqual(prop_b.selection, 'option_b')
+
+            prop_c, = self.property_.create([{}])
+            self.assert_(prop_c)
+            self.assertEqual(prop_c.selection, None)
+
+            props = self.property_.search([('selection', '=', 'option_a')])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([('selection', '!=', None)])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([('selection', '=', None)])
+            self.assertEqual(props, [prop_c])
+
+            props = self.property_.search([('selection', '!=', 'option_a')])
+            self.assertEqual(props, [prop_b, prop_c])
+
+            props = self.property_.search([
+                    ('selection', 'in', ['option_a'])])
+            self.assertEqual(props, [prop_a])
+
+            props = self.property_.search([
+                    ('selection', 'in', ['option_a', 'option_b'])])
+            self.assertEqual(props, [prop_a, prop_b])
+
+            props = self.property_.search([
+                    ('selection', 'not in', ['option_a'])])
+            self.assertEqual(props, [prop_b, prop_c])
+
+            # Test default value
+            property_field, = self.model_field.search([
+                    ('model.model', '=', 'test.property'),
+                    ('name', '=', 'selection'),
+                    ], limit=1)
+            self.ir_property.create([{
+                        'field': property_field.id,
+                        'value': ',option_a',
+                        }])
+
+            prop_d, = self.property_.create([{}])
+            self.assert_(prop_d)
+            self.assertEqual(prop_d.selection, 'option_a')
+
+            self.property_.write([prop_a], {'selection': None})
+            self.assertEqual(prop_a.selection, None)
+
+            self.property_.write([prop_c], {'selection': 'option_b'})
+            self.assertEqual(prop_c.selection, 'option_b')
+
+            transaction.cursor.rollback()
+
+    def test0160selection(self):
+        'Test Selection'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            selection1, = self.selection.create([{'select': 'arabic'}])
+            self.assert_(selection1)
+            self.assertEqual(selection1.select, 'arabic')
+
+            selection2, = self.selection.create([{'select': None}])
+            self.assert_(selection2)
+            self.assertEqual(selection2.select, None)
+
+            self.assertRaises(Exception, self.selection.create,
+                [{'select': 'chinese'}])
+
+            selection3, = self.selection.create(
+                [{'select': 'arabic', 'dyn_select': '1'}])
+            self.assert_(selection3)
+            self.assertEqual(selection3.select, 'arabic')
+            self.assertEqual(selection3.dyn_select, '1')
+
+            selection4, = self.selection.create(
+                [{'select': 'hexa', 'dyn_select': '0x3'}])
+            self.assert_(selection4)
+            self.assertEqual(selection4.select, 'hexa')
+            self.assertEqual(selection4.dyn_select, '0x3')
+
+            selection5, = self.selection.create(
+                [{'select': 'hexa', 'dyn_select': None}])
+            self.assert_(selection5)
+            self.assertEqual(selection5.select, 'hexa')
+            self.assertEqual(selection5.dyn_select, None)
+
+            self.assertRaises(Exception, self.selection.create,
+                [{'select': 'arabic', 'dyn_select': '0x3'}])
+            self.assertRaises(Exception, self.selection.create,
+                [{'select': 'hexa', 'dyn_select': '3'}])
+
+            self.assertRaises(Exception, self.selection_required.create, [{}])
+            transaction.cursor.rollback()
+
+            self.assertRaises(Exception, self.selection_required.create,
+                [{'select': None}])
+            transaction.cursor.rollback()
+
+            selection6, = self.selection_required.create([{'select': 'latin'}])
+            self.assert_(selection6)
+            self.assertEqual(selection6.select, 'latin')
+
+    def test0170dict(self):
+        'Test Dict'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            dict1, = self.dict_.create([{
+                        'dico': {'a': 1, 'b': 2},
+                        }])
+            self.assert_(dict1.dico == {'a': 1, 'b': 2})
+
+            self.dict_.write([dict1], {'dico': {'z': 26}})
+            self.assert_(dict1.dico == {'z': 26})
+
+            dict2, = self.dict_.create([{}])
+            self.assert_(dict2.dico is None)
+
+            dict3, = self.dict_default.create([{}])
+            self.assert_(dict3.dico == {'a': 1})
+
+            self.assertRaises(Exception, self.dict_required.create, [{}])
+            transaction.cursor.rollback()
+
+            dict4, = self.dict_required.create([{'dico': dict(a=1)}])
+            self.assert_(dict4.dico == {'a': 1})
+
+            self.assertRaises(Exception, self.dict_required.create,
+                [{'dico': {}}])
+            transaction.cursor.rollback()
+
+    def test0180binary(self):
+        'Test Binary'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            bin1, = self.binary.create([{
+                        'binary': buffer('foo'),
+                        }])
+            self.assert_(bin1.binary == buffer('foo'))
+
+            self.binary.write([bin1], {'binary': buffer('bar')})
+            self.assert_(bin1.binary == buffer('bar'))
+
+            with transaction.set_context({'test.binary.binary': 'size'}):
+                bin1_size = self.binary(bin1.id)
+                self.assert_(bin1_size.binary == len('bar'))
+                self.assert_(bin1_size.binary != buffer('bar'))
+
+            bin2, = self.binary.create([{}])
+            self.assert_(bin2.binary is None)
+
+            bin3, = self.binary_default.create([{}])
+            self.assert_(bin3.binary == buffer('default'))
+
+            self.assertRaises(Exception, self.binary_required.create, [{}])
+            transaction.cursor.rollback()
+
+            bin4, = self.binary_required.create([{'binary': buffer('baz')}])
+            self.assert_(bin4.binary == buffer('baz'))
+
+            self.assertRaises(Exception, self.binary_required.create,
+                [{'binary': buffer('')}])
+
+            transaction.cursor.rollback()
+
+    def test0190many2one(self):
+        'Test Many2One'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+
+            # Not respecting the domain raise an Error
+            m2o_1, = self.m2o_target.create([{'value': 1}])
+            self.assertRaises(UserError, self.m2o_domain_validation.create,
+                [{'many2one': m2o_1}])
+
+            # Respecting the domain works
+            m2o_6, = self.m2o_target.create([{'value': 6}])
+            domain, = self.m2o_domain_validation.create([{'many2one': m2o_6}])
+            self.assert_(domain)
+            self.assertEqual(domain.many2one.value, 6)
+
+            # Inactive records are taken into account
+            m2o_6.active = False
+            m2o_6.save()
+            domain.dummy = 'Dummy'
+            domain.save()
+
+            transaction.cursor.rollback()
+
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(FieldsTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)

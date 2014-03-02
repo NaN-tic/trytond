@@ -1,23 +1,25 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-"""
-SPEC: Execute "model.function(*eval(args))" periodically
-   date        : date to execute the job or NULL if directly
-   delete_after: delete the ir.cron entry after execution
-   interval_*  : period
-   max_repeat  : number of execution or NULL if endlessly
-"""
-
-from trytond.backend import Database
-from trytond.model import ModelView, ModelSQL, fields
-from trytond.tools import safe_eval
 import datetime
 from dateutil.relativedelta import relativedelta
 import traceback
 import sys
+import logging
+from email.mime.text import MIMEText
+from email.header import Header
+
+from ..model import ModelView, ModelSQL, fields
+from ..tools import safe_eval, get_smtp_server
+from ..transaction import Transaction
+from ..pool import Pool
+from .. import backend
+from ..config import CONFIG
+
+__all__ = [
+    'Cron',
+    ]
 
 _INTERVALTYPES = {
-    'work_days': lambda interval: relativedelta(days=interval),
     'days': lambda interval: relativedelta(days=interval),
     'hours': lambda interval: relativedelta(hours=interval),
     'weeks': lambda interval: relativedelta(weeks=interval),
@@ -25,176 +27,182 @@ _INTERVALTYPES = {
     'minutes': lambda interval: relativedelta(minutes=interval),
 }
 
+
 class Cron(ModelSQL, ModelView):
     "Cron"
-    _name = "ir.cron"
-    _description = __doc__
+    __name__ = "ir.cron"
     name = fields.Char('Name', required=True, translate=True)
     user = fields.Many2One('res.user', 'Execution User', required=True,
-                           help="The user used to execute this action")
+        domain=[('active', '=', False)],
+        help="The user used to execute this action")
     request_user = fields.Many2One(
         'res.user', 'Request User', required=True,
         help="The user who will receive requests in case of failure")
-    active = fields.Boolean('Active', select=1)
-    interval_number = fields.Integer('Interval Number')
-    interval_type = fields.Selection( [
-       ('minutes', 'Minutes'),
-       ('hours', 'Hours'),
-       ('work_days', 'Work Days'),
-       ('days', 'Days'),
-       ('weeks', 'Weeks'),
-       ('months', 'Months'),
-       ], 'Interval Unit')
-    numbercall = fields.Integer('Number of calls', select=1,
-       help='Number of times the function is called,\n' \
-               'a negative number indicates that the function ' \
-               'will always be called')
-    doall = fields.Boolean('Repeat missed')
-    nextcall = fields.DateTime('Next call date', required=True,
-            select=1)
+    active = fields.Boolean('Active', select=True)
+    interval_number = fields.Integer('Interval Number', required=True)
+    interval_type = fields.Selection([
+            ('minutes', 'Minutes'),
+            ('hours', 'Hours'),
+            ('days', 'Days'),
+            ('weeks', 'Weeks'),
+            ('months', 'Months'),
+            ], 'Interval Unit')
+    number_calls = fields.Integer('Number of Calls', select=1, required=True,
+       help=('Number of times the function is called, a negative '
+           'number indicates that the function will always be '
+           'called'))
+    repeat_missed = fields.Boolean('Repeat Missed')
+    next_call = fields.DateTime('Next Call', required=True,
+            select=True)
     model = fields.Char('Model')
     function = fields.Char('Function')
     args = fields.Text('Arguments')
-    priority = fields.Integer('Priority',
-       help='0=Very Urgent\n10=Not urgent')
-    running = fields.Boolean('Running', readonly=True, select=1)
 
-    def __init__(self):
-        super(Cron, self).__init__()
-        self._error_messages.update({
-            'request_title': 'Scheduled action failed',
-            'request_body': "The following action failed to execute "
-                            "properly: \"%s\"\n Traceback: \n\n%s\n"
-            })
+    @classmethod
+    def __setup__(cls):
+        super(Cron, cls).__setup__()
+        cls._error_messages.update({
+                'request_title': 'Scheduled action failed',
+                'request_body': ("The following action failed to execute "
+                    "properly: \"%s\"\n%s\n Traceback: \n\n%s\n")
+                })
 
-    def default_nextcall(self, cursor, user, context=None):
+    @classmethod
+    def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
+        cursor = Transaction().cursor
+        cron = cls.__table__()
+
+        # Migration from 2.0: rename numbercall, doall and nextcall
+        table = TableHandler(cursor, cls, module_name)
+        table.column_rename('numbercall', 'number_calls')
+        table.column_rename('doall', 'repeat_missed')
+        table.column_rename('nextcall', 'next_call')
+        table.drop_column('running')
+
+        super(Cron, cls).__register__(module_name)
+
+        # Migration from 2.0: work_days removed
+        cursor.execute(*cron.update(
+                [cron.interval_type], ['days'],
+                where=cron.interval_type == 'work_days'))
+
+    @staticmethod
+    def default_next_call():
         return datetime.datetime.now()
 
-    def default_priority(self, cursor, user, context=None):
-        return 5
-
-    def default_user(self, cursor, user, context=None):
-        return int(user)
-
-    def default_interval_number(self, cursor, user, context=None):
+    @staticmethod
+    def default_interval_number():
         return 1
 
-    def default_interval_type(self, cursor, user, context=None):
+    @staticmethod
+    def default_interval_type():
         return 'months'
 
-    def default_numbercall(self, cursor, user, context=None):
-        return 1
+    @staticmethod
+    def default_number_calls():
+        return -1
 
-    def default_active(self, cursor, user, context=None):
+    @staticmethod
+    def default_active():
         return True
 
-    def default_doall(self, cursor, user, context=None):
+    @staticmethod
+    def default_repeat_missed():
         return True
 
-    def default_running(self, cursor, user, context=None):
-        return False
-
-    def check_xml_record(self, cursor, user, ids, values, context=None):
+    @staticmethod
+    def check_xml_record(crons, values):
         return True
 
-    def _callback(self, cursor, cron):
+    @staticmethod
+    def get_delta(cron):
+        '''
+        Return the relativedelta for the next call
+        '''
+        return _INTERVALTYPES[cron.interval_type](cron.interval_number)
+
+    @classmethod
+    def send_error_message(cls, cron):
+        tb_s = ''.join(traceback.format_exception(*sys.exc_info()))
+        tb_s = tb_s.decode('utf-8', 'ignore')
+        subject = cls.raise_user_error('request_title',
+            raise_exception=False)
+        body = cls.raise_user_error('request_body',
+            (cron.name, cron.__url__, tb_s),
+            raise_exception=False)
+
+        from_addr = CONFIG['smtp_default_from_email']
+        to_addr = cron.request_user.email
+
+        msg = MIMEText(body, _charset='utf-8')
+        msg['To'] = to_addr
+        msg['From'] = from_addr
+        msg['Subject'] = Header(subject, 'utf-8')
+        logger = logging.getLogger(__name__)
+        if not to_addr:
+            logger.error(msg.as_string())
+        else:
+            try:
+                server = get_smtp_server()
+                server.sendmail(from_addr, to_addr, msg.as_string())
+                server.quit()
+            except Exception, exception:
+                logger.error('Unable to deliver email (%s):\n %s'
+                    % (exception, msg.as_string()))
+
+    @classmethod
+    def _callback(cls, cron):
+        pool = Pool()
+        Config = pool.get('ir.configuration')
         try:
-            args = (cron['args'] or []) and safe_eval(cron['args'])
-            obj = self.pool.get(cron['model'])
-            if not obj and hasattr(obj, cron['function']):
-                return False
-            fct = getattr(obj, cron['function'])
-            fct(cursor, cron['user'], *args)
-        except Exception, error:
-            cursor.rollback()
+            args = (cron.args or []) and safe_eval(cron.args)
+            Model = pool.get(cron.model)
+            with Transaction().set_user(cron.user.id):
+                getattr(Model, cron.function)(*args)
+        except Exception:
+            Transaction().cursor.rollback()
 
-            tb_s = ''
-            for line in traceback.format_exception(*sys.exc_info()):
-                try:
-                    line = line.encode('utf-8', 'ignore')
-                except:
-                    continue
-                tb_s += line
-            try:
-                tb_s += error.message.decode('utf-8', 'ignore')
-            except:
-                pass
+            req_user = cron.request_user
+            language = (req_user.language.code if req_user.language
+                    else Config.get_language())
+            with Transaction().set_user(cron.user.id), \
+                    Transaction().set_context(language=language):
+                cls.send_error_message(cron)
 
-            request_obj = self.pool.get('res.request')
-            try:
-                user_obj = self.pool.get('res.user')
-                req_user = user_obj.browse(cursor, cron['user'], cron['request_user'])
-                rid = request_obj.create(
-                    cursor, cron['user'],
-                    {'name': self.raise_user_error(
-                            cursor, 'request_title', raise_exception=False,
-                            context={'language': req_user.language and \
-                                         req_user.language.code or "en_US"}),
-                     'priority': '2',
-                     'act_from': cron['user'],
-                     'act_to': cron['request_user'],
-                     'body': self.raise_user_error(
-                            cursor, 'request_body', (cron['name'], tb_s),
-                            raise_exception=False),
-                     'date_sent': datetime.datetime.now(),
-                     'references': [
-                            ('create',{'reference': "ir.cron,%s"%cron['id']})],
-                     'state': 'waiting',
-                     'trigger_date': datetime.datetime.now(),
-                     })
-                cursor.commit()
-            except:
-                cursor.rollback()
-
-    def pool_jobs(self, db_name):
+    @classmethod
+    def run(cls, db_name):
         now = datetime.datetime.now()
-        try:
-            database = Database(db_name).connect()
-            cursor = database.cursor()
-        except:
-            return
-        try:
-            try:
-                cursor.lock(self._table)
-                cursor.execute('SELECT * FROM ir_cron ' \
-                        'WHERE numbercall <> 0 ' \
-                            'AND active ' \
-                            'AND nextcall <= %s ' \
-                            'AND NOT running ' \
-                            'ORDER BY priority', (datetime.datetime.now(),))
-                crons = cursor.dictfetchall()
+        with Transaction().start(db_name, 0) as transaction:
+            transaction.cursor.lock(cls._table)
+            crons = cls.search([
+                    ('number_calls', '!=', 0),
+                    ('next_call', '<=', datetime.datetime.now()),
+                    ])
 
-                for cron in crons:
-                    cursor.execute('UPDATE ir_cron SET running = %s ' \
-                                       'WHERE id = %s', (True, cron['id']))
-                    nextcall = cron['nextcall']
-                    numbercall = cron['numbercall']
-                    done = False
+            for cron in crons:
+                try:
+                    next_call = cron.next_call
+                    number_calls = cron.number_calls
+                    first = True
+                    while next_call < now and number_calls != 0:
+                        if first or cron.repeat_missed:
+                            cls._callback(cron)
+                        next_call += cls.get_delta(cron)
+                        if number_calls > 0:
+                            number_calls -= 1
+                        first = False
 
-                    while nextcall < now and numbercall:
-                        if numbercall > 0:
-                            numbercall -= 1
-                        if not done or cron['doall']:
-                            self._callback(cursor, cron)
-                        if numbercall:
-                            nextcall += _INTERVALTYPES[cron['interval_type']](
-                                    cron['interval_number'])
-                        done = True
-
-                    addsql = ''
-                    addsql_param = []
-                    if not numbercall:
-                        addsql = ', active = %s'
-                        addsql_param = [False]
-                    cursor.execute("UPDATE ir_cron SET nextcall = %s, " \
-                                "running = %s, numbercall = %s" + addsql + " " \
-                                "WHERE id = %s", [nextcall, False, numbercall] \
-                                + addsql_param + [cron['id']])
-                    cursor.commit()
-            except Exception, e:
-                cursor.rollback()
-                raise
-        finally:
-            cursor.close()
-
-Cron()
+                    cron.next_call = next_call
+                    cron.number_calls = number_calls
+                    if not number_calls:
+                        cron.active = False
+                    cron.save()
+                    transaction.cursor.commit()
+                except Exception:
+                    transaction.cursor.rollback()
+                    tb_s = reduce(lambda x, y: x + y,
+                            traceback.format_exception(*sys.exc_info()))
+                    tb_s = tb_s.decode('utf-8', 'ignore')
+                    logger = logging.getLogger('cron')
+                    logger.error('Exception:\n%s' % tb_s)

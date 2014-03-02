@@ -4,9 +4,6 @@
 import inspect
 import copy
 from trytond.model.fields.field import Field
-from trytond.model.fields.float import digits_validate
-from trytond.model.fields.one2many import add_remove_validate
-from trytond.pyson import PYSON
 
 
 class Function(Field):
@@ -14,12 +11,15 @@ class Function(Field):
     Define function field (any).
     '''
 
-    def __init__(self, field, getter, setter=None, searcher=None):
+    def __init__(self, field, getter, setter=None, searcher=None,
+            loading='lazy'):
         '''
         :param field: The field of the function.
         :param getter: The name of the function for getting values.
         :param setter: The name of the function to set value.
         :param searcher: The name of the function to search.
+        :param loading: Define how the field must be loaded:
+            ``lazy`` or ``eager``.
         '''
         assert isinstance(field, Field)
         self._field = field
@@ -29,12 +29,22 @@ class Function(Field):
         if not self.setter:
             self._field.readonly = True
         self.searcher = searcher
+        assert loading in ('lazy', 'eager'), \
+            'loading must be "lazy" or "eager"'
+        self.loading = loading
 
     __init__.__doc__ += Field.__init__.__doc__
 
     def __copy__(self):
         return Function(copy.copy(self._field), self.getter,
                 setter=self.setter, searcher=self.searcher)
+
+    def __deepcopy__(self, memo):
+        return Function(copy.deepcopy(self._field, memo),
+            copy.deepcopy(self.getter, memo),
+            setter=copy.deepcopy(self.setter, memo),
+            searcher=copy.deepcopy(self.searcher, memo),
+            loading=copy.deepcopy(self.loading, memo))
 
     def __getattr__(self, name):
         return getattr(self._field, name)
@@ -43,76 +53,54 @@ class Function(Field):
         return self._field[name]
 
     def __setattr__(self, name, value):
-        if name in ('_field', '_type', 'getter', 'setter', 'searcher'):
-            return object.__setattr__(self, name, value)
-        return setattr(self._field, name, value)
+        if name in ('_field', '_type', 'getter', 'setter', 'searcher', 'name'):
+            object.__setattr__(self, name, value)
+            if name != 'name':
+                return
+        setattr(self._field, name, value)
 
-    def search(self, cursor, user, model, name, clause, context=None):
-        '''
-        Call the searcher.
-
-        :param cursor: The database cursor.
-        :param user: The user id.
-        :param model: The model.
-        :param name: The name of the field.
-        :param clause: The search domain clause. See ModelStorage.search
-        :param context: The context.
-        :return: a list of domain clause.
-        '''
+    def convert_domain(self, domain, tables, Model):
+        name, operator, value = domain[:3]
         if not self.searcher:
-            model.raise_user_error(cursor, 'search_function_missing',
-                    name, context=context)
-        return getattr(model, self.searcher)(cursor, user, name, tuple(clause),
-                context=context)
+            Model.raise_user_error('search_function_missing', name)
+        return getattr(Model, self.searcher)(name, domain)
 
-    def get(self, cursor, user, ids, model, name, values=None, context=None):
+    def get(self, ids, Model, name, values=None):
         '''
         Call the getter.
         If the function has ``names`` in the function definition then
         it will call it with a list of name.
-
-        :param cursor: The database cursor.
-        :param user: The user id.
-        :param ids: A list of ids.
-        :param model: The model.
-        :param name: The name of the field or a list of name field.
-        :param values:
-        :param context: The contest.
-        :return: a dictionary with ids as key and values as value or
-            a dictionary with name as key and a dictionary as value if
-            name is a list of field name.
         '''
+        method = getattr(Model, self.getter)
+
+        def call(name):
+            records = Model.browse(ids)
+            if not hasattr(method, 'im_self') or method.im_self:
+                return method(records, name)
+            else:
+                return dict((r.id, method(r, name)) for r in records)
         if isinstance(name, list):
             names = name
             # Test is the function works with a list of names
-            if 'names' in inspect.getargspec(getattr(model, self.getter))[0]:
-                return getattr(model, self.getter)(cursor, user, ids, names,
-                        context=context)
-            res = {}
-            for name in names:
-                res[name] = getattr(model, self.getter)(cursor, user, ids,
-                        name, context=context)
-            return res
+            if 'names' in inspect.getargspec(method)[0]:
+                return call(names)
+            return dict((name, call(name)) for name in names)
         else:
             # Test is the function works with a list of names
-            if 'names' in inspect.getargspec(getattr(model, self.getter))[0]:
+            if 'names' in inspect.getargspec(method)[0]:
                 name = [name]
-            return getattr(model, self.getter)(cursor, user, ids, name,
-                    context=context)
+            return call(name)
 
-
-    def set(self, cursor, user, ids, model, name, value, context=None):
+    def set(self, Model, name, ids, value, *args):
         '''
         Call the setter.
-
-        :param cursor: The database cursor.
-        :param user: The user id.
-        :param ids: A list of ids.
-        :param model: The model.
-        :param name: The name of the field.
-        :param value: The value to set.
-        :param context: The context.
         '''
         if self.setter:
-            getattr(model, self.setter)(cursor, user, ids, name, value,
-                    context=context)
+            # TODO change setter API to use sequence of records, value
+            setter = getattr(Model, self.setter)
+            args = iter((ids, value) + args)
+            for ids, value in zip(args, args):
+                setter(Model.browse(ids), name, value)
+
+    def __set__(self, inst, value):
+        self._field.__set__(inst, value)

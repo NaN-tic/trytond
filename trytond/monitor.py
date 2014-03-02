@@ -10,6 +10,7 @@ _LOCK = Lock()
 _TIMES = {}
 _MODULES = None
 
+
 def _modified(path):
     _LOCK.acquire()
     try:
@@ -24,11 +25,12 @@ def _modified(path):
             if mtime != _TIMES[path]:
                 _TIMES[path] = mtime
                 return True
-        except:
+        except Exception:
             return True
     finally:
         _LOCK.release()
     return False
+
 
 def monitor():
     '''
@@ -38,6 +40,7 @@ def monitor():
     '''
     global _MODULES
     modified = False
+    directories = set()
     for module in sys.modules.keys():
         if not module.startswith('trytond.'):
             continue
@@ -55,12 +58,25 @@ def monitor():
                 modified = False
                 break
             modified = True
+
+        # Check view XML
+        directory = os.path.dirname(path)
+        if directory not in directories:
+            directories.add(directory)
+            view_dir = os.path.join(directory, 'view')
+            if os.path.isdir(view_dir):
+                for view in os.listdir(view_dir):
+                    view = os.path.join(view_dir, view)
+                    if os.path.splitext(view)[1] == '.xml':
+                        if _modified(view):
+                            modified = True
+
     modules = set(get_module_list())
     if _MODULES is None:
         _MODULES = modules
     for module in modules.difference(_MODULES):
         if subprocess.call((sys.executable, '-c',
-            'import trytond.modules.%s' % module)):
+                    'import trytond.modules.%s' % module)):
             modified = False
             break
         modified = True

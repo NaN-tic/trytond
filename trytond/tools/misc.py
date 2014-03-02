@@ -4,22 +4,19 @@
 """
 Miscelleanous tools used by tryton
 """
-import os, time, sys
-import inspect
-from trytond.config import CONFIG
+import os
+import sys
 import subprocess
-import zipfile
-from trytond.backend import Database
-from threading import Lock, local
+from threading import local
 import smtplib
-try:
-    import cStringIO as StringIO
-except ImportError:
-    import StringIO
 import dis
-import datetime
 from decimal import Decimal
+from array import array
+from sql import Literal
+from sql.operators import Or
+from trytond.config import CONFIG
 from trytond.const import OPERATORS
+
 
 def find_in_path(name):
     if os.name == "nt":
@@ -34,11 +31,13 @@ def find_in_path(name):
             return val
     return name
 
+
 def find_pg_tool(name):
     if CONFIG['pg_path'] and CONFIG['pg_path'] != 'None':
         return os.path.join(CONFIG['pg_path'], name)
     else:
         return find_in_path(name)
+
 
 def exec_pg_command(name, *args):
     prog = find_pg_tool(name)
@@ -46,6 +45,7 @@ def exec_pg_command(name, *args):
         raise Exception('Couldn\'t find %s' % name)
     args2 = (os.path.basename(prog),) + args
     return os.spawnv(os.P_WAIT, prog, args2)
+
 
 def exec_pg_command_pipe(name, *args):
     prog = find_pg_tool(name)
@@ -66,83 +66,64 @@ def exec_pg_command_pipe(name, *args):
             stdout=subprocess.PIPE, env=child_env)
     return pipe
 
+
 def exec_command_pipe(name, *args):
     prog = find_in_path(name)
     if not prog:
         raise Exception('Couldn\'t find %s' % name)
     if os.name == "nt":
-        cmd = '"'+prog+'" '+' '.join(args)
+        cmd = '"' + prog + '" ' + ' '.join(args)
     else:
-        cmd = prog+' '+' '.join(args)
+        cmd = prog + ' ' + ' '.join(args)
     return os.popen2(cmd, 'b')
+
 
 def file_open(name, mode="r", subdir='modules'):
     """Open a file from the root dir, using a subdir folder."""
     from trytond.modules import EGG_MODULES
-    root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root_path = os.path.dirname(os.path.dirname(os.path.abspath(
+                unicode(__file__, sys.getfilesystemencoding()))))
 
-    name3 = False
+    egg_name = False
     if subdir == 'modules':
         module_name = name.split(os.sep)[0]
         if module_name in EGG_MODULES:
             epoint = EGG_MODULES[module_name]
             mod_path = os.path.join(epoint.dist.location,
                     *epoint.module_name.split('.')[:-1])
-            name3 = os.path.join(mod_path, name)
-            if not os.path.isfile(name3):
+            egg_name = os.path.join(mod_path, name)
+            if not os.path.isfile(egg_name):
                 # Find module in path
                 for path in sys.path:
                     mod_path = os.path.join(path,
                             *epoint.module_name.split('.')[:-1])
-                    name3 = os.path.join(mod_path, name)
-                    if os.path.isfile(name3):
+                    egg_name = os.path.join(mod_path, name)
+                    if os.path.isfile(egg_name):
                         break
-                if not os.path.isfile(name3):
+                if not os.path.isfile(egg_name):
                     # When testing modules from setuptools location is the
                     # module directory
-                    name3 = os.path.join(os.path.dirname(epoint.dist.location),
-                            name)
+                    egg_name = os.path.join(
+                        os.path.dirname(epoint.dist.location), name)
 
     if subdir:
-        if subdir == 'modules'\
-                and (name.startswith('ir' + os.sep) \
-                    or name.startswith('workflow' + os.sep) \
-                    or name.startswith('res' + os.sep) \
-                    or name.startswith('webdav' + os.sep) \
-                    or name.startswith('test' + os.sep)):
+        if (subdir == 'modules'
+                and (name.startswith('ir' + os.sep)
+                    or name.startswith('res' + os.sep)
+                    or name.startswith('webdav' + os.sep)
+                    or name.startswith('tests' + os.sep))):
             name = os.path.join(root_path, name)
         else:
             name = os.path.join(root_path, subdir, name)
     else:
         name = os.path.join(root_path, name)
 
-    # Check for a zipfile in the path
-    head = name
-    zipname = False
-    name2 = False
-    while True:
-        head, tail = os.path.split(head)
-        if head == root_path:
-            break
-        if not tail:
-            break
-        if zipname:
-            zipname = os.path.join(tail, zipname)
-        else:
-            zipname = tail
-        if zipfile.is_zipfile(head+'.zip'):
-            zfile = zipfile.ZipFile(head+'.zip')
-            try:
-                return StringIO.StringIO(zfile.read(os.path.join(
-                    os.path.basename(head), zipname).replace(
-                        os.sep, '/')))
-            except:
-                name2 = os.path.normpath(os.path.join(head + '.zip', zipname))
-    for i in (name2, name, name3):
+    for i in (name, egg_name):
         if i and os.path.isfile(i):
             return open(i, mode)
 
-    raise IOError, 'File not found : '+str(name)
+    raise IOError('File not found : %s ' % name)
+
 
 def get_smtp_server():
     """
@@ -165,175 +146,6 @@ def get_smtp_server():
 
     return smtp_server
 
-def find_language_context(args, kargs=None):
-    if kargs is None:
-        kargs = {}
-    res = 'en_US'
-    for arg in args:
-        if isinstance(arg, dict):
-            res = arg.get('language', 'en_US')
-    return kargs.get('context', {}).get('language', res)
-
-
-class Cache(object):
-    """
-    Use it as a decorator of the function you plan to cache
-    Timeout: 0 = no timeout, otherwise in seconds
-    """
-    _cache_instance = []
-    _resets = {}
-    _resets_lock = Lock()
-
-    def __init__(self, name, timeout=3600, max_len=1024):
-        self.timeout = timeout
-        self.max_len = max_len
-        self._cache = {}
-        self._cache_instance.append(self)
-        self._name = name
-        self._timestamp = None
-        self._lock = Lock()
-
-    def __call__(self, function):
-        arg_names = inspect.getargspec(function)[0][2:]
-
-        def cached_result(self2, cursor=None, *args, **kwargs):
-            result = None
-            find = False
-            if isinstance(cursor, basestring):
-                Cache.reset(cursor, self._name)
-                self._lock.acquire()
-                try:
-                    self._cache[cursor] = {}
-                finally:
-                    self._lock.release()
-                return True
-            # Update named arguments with positional argument values
-            kwargs_origin = kwargs.copy()
-            kwargs.update(dict(zip(arg_names, args)))
-            if 'context' in kwargs:
-                if isinstance(kwargs['context'], dict):
-                    kwargs['context'] = kwargs['context'].copy()
-                    for i in ('_timestamp', '_delete', '_create_records',
-                            '_delete_records'):
-                        if i in kwargs['context']:
-                            del kwargs['context'][i]
-            kwargs = kwargs.items()
-            kwargs.sort()
-
-            self._lock.acquire()
-            try:
-                self._cache.setdefault(cursor.dbname, {})
-            finally:
-                self._lock.release()
-
-            lower = None
-            self._lock.acquire()
-            try:
-                if len(self._cache[cursor.dbname]) > self.max_len:
-                    mintime = time.time() - self.timeout
-                    for key in self._cache[cursor.dbname].keys():
-                        last_time = self._cache[cursor.dbname][key][1]
-                        if mintime > last_time:
-                            del self._cache[cursor.dbname][key]
-                        else:
-                            if not lower or lower[1] > last_time:
-                                lower = (key, last_time)
-                if len(self._cache[cursor.dbname]) > self.max_len and lower:
-                    del self._cache[cursor.dbname][lower[0]]
-            finally:
-                self._lock.release()
-
-            # Work out key as a tuple
-            key = (id(self2), repr(kwargs))
-
-            # Check cache and return cached value if possible
-            self._lock.acquire()
-            try:
-                if key in self._cache[cursor.dbname]:
-                    (value, last_time) = self._cache[cursor.dbname][key]
-                    mintime = time.time() - self.timeout
-                    if self.timeout <= 0 or mintime <= last_time:
-                        self._cache[cursor.dbname][key] = (value, time.time())
-                        result = value
-                        find = True
-            finally:
-                self._lock.release()
-
-            if not find:
-                # Work out new value, cache it and return it
-                # Should copy() this value to avoid futur modf of the cacle ?
-                result = function(self2, cursor, *args, **kwargs_origin)
-
-                self._lock.acquire()
-                try:
-                    self._cache[cursor.dbname][key] = (result, time.time())
-                finally:
-                    self._lock.release()
-            return result
-
-        cached_result.__doc__ = function.__doc__
-        return cached_result
-
-    @staticmethod
-    def clean(dbname):
-        if not CONFIG['multi_server']:
-            return
-        database = Database(dbname).connect()
-        cursor = database.cursor()
-        try:
-            cursor.execute('SELECT "timestamp", "name" FROM ir_cache')
-            timestamps = {}
-            for timestamp, name in cursor.fetchall():
-                timestamps[name] = timestamp
-        finally:
-            cursor.commit()
-            cursor.close()
-        for obj in Cache._cache_instance:
-            if obj._name in timestamps:
-                if not obj._timestamp or timestamps[obj._name] > obj._timestamp:
-                    obj._timestamp = timestamps[obj._name]
-                    obj._lock.acquire()
-                    try:
-                        obj._cache[dbname] = {}
-                    finally:
-                        obj._lock.release()
-
-    @staticmethod
-    def reset(dbname, name):
-        if not CONFIG['multi_server']:
-            return
-        Cache._resets_lock.acquire()
-        try:
-            Cache._resets.setdefault(dbname, set())
-            Cache._resets[dbname].add(name)
-        finally:
-            Cache._resets_lock.release()
-        return
-
-    @staticmethod
-    def resets(dbname):
-        if not CONFIG['multi_server']:
-            return
-        database = Database(dbname).connect()
-        cursor = database.cursor()
-        Cache._resets_lock.acquire()
-        Cache._resets.setdefault(dbname, set())
-        try:
-            for name in Cache._resets[dbname]:
-                cursor.execute('SELECT name FROM ir_cache WHERE name = %s',
-                            (name,))
-                if cursor.fetchone():
-                    cursor.execute('UPDATE ir_cache SET "timestamp" = %s '\
-                            'WHERE name = %s', (datetime.datetime.now(), name))
-                else:
-                    cursor.execute('INSERT INTO ir_cache ' \
-                            '("timestamp", "name") ' \
-                            'VALUES (%s, %s)', (datetime.datetime.now(), name))
-            Cache._resets[dbname].clear()
-        finally:
-            cursor.commit()
-            cursor.close()
-            Cache._resets_lock.release()
 
 def memoize(maxsize):
     """
@@ -397,6 +209,7 @@ def memoize(maxsize):
         return wrapper
     return wrap
 
+
 def mod10r(number):
     """
     Recursive mod10
@@ -410,7 +223,7 @@ def mod10r(number):
     for digit in number:
         result += digit
         if digit.isdigit():
-            report = codec[ (int(digit) + report) % 10 ]
+            report = codec[(int(digit) + report) % 10]
     return result + str((10 - report) % 10)
 
 
@@ -469,7 +282,7 @@ class LocalDict(local):
         return self._dict.get(k, d)
 
     def has_key(self, k):
-        return self._dict.has_key(k)
+        return k in self._dict
 
     def items(self):
         return self._dict.items()
@@ -488,9 +301,6 @@ class LocalDict(local):
 
     def __ge__(self, y):
         return self._dict.__ge__(y)
-
-    def __getitem__(self, y):
-        return self._dict.__getitem__(y)
 
     def __gt__(self, y):
         return self._dict.__gt__(y)
@@ -513,25 +323,21 @@ class LocalDict(local):
     def __ne__(self, y):
         return self._dict.__ne__(y)
 
+
 def reduce_ids(field, ids):
     '''
-    Return a small SQL clause for ids
-
-    :param field: the field of the clause
-    :param ids: the list of ids
-    :return: sql string and sql param
+    Return a small SQL expression for the list of ids and the sql column
     '''
     if not ids:
-        return '(%s)', [False]
+        return Literal(False)
     assert all(x.is_integer() for x in ids if isinstance(x, float)), \
         'ids must be integer'
     ids = map(int, ids)
     ids.sort()
     prev = ids.pop(0)
     continue_list = [prev, prev]
-    discontinue_list = []
-    sql = []
-    args = []
+    discontinue_list = array('l')
+    sql = Or()
     for i in ids:
         if i == prev:
             continue
@@ -540,9 +346,8 @@ def reduce_ids(field, ids):
                 discontinue_list.extend([continue_list[0] + x for x in
                     range(continue_list[-1] - continue_list[0] + 1)])
             else:
-                sql.append('((' + field + ' >= %s) AND (' + field + ' <= %s))')
-                args.append(continue_list[0])
-                args.append(continue_list[-1])
+                sql.append((field >= continue_list[0])
+                    & (field <= continue_list[-1]))
             continue_list = []
         continue_list.append(i)
         prev = i
@@ -550,30 +355,26 @@ def reduce_ids(field, ids):
         discontinue_list.extend([continue_list[0] + x for x in
             range(continue_list[-1] - continue_list[0] + 1)])
     else:
-        sql.append('((' + field + ' >= %s) AND (' + field + ' <= %s))')
-        args.append(continue_list[0])
-        args.append(continue_list[-1])
+        sql.append((field >= continue_list[0]) & (field <= continue_list[-1]))
     if discontinue_list:
-        sql.append('(' + field + ' IN (' + \
-                ','.join(('%s',) * len(discontinue_list)) + '))')
-        args.extend(discontinue_list)
-    return '(' + ' OR '.join(sql) + ')', args
+        sql.append(field.in_(discontinue_list))
+    return sql
 
 _ALLOWED_CODES = set(dis.opmap[x] for x in [
-    'POP_TOP','ROT_TWO','ROT_THREE','ROT_FOUR','DUP_TOP',
-    'BUILD_LIST','BUILD_MAP','BUILD_TUPLE',
-    'LOAD_CONST','RETURN_VALUE','STORE_SUBSCR',
-    'UNARY_POSITIVE','UNARY_NEGATIVE','UNARY_NOT',
-    'UNARY_INVERT','BINARY_POWER','BINARY_MULTIPLY',
-    'BINARY_DIVIDE','BINARY_FLOOR_DIVIDE','BINARY_TRUE_DIVIDE',
-    'BINARY_MODULO','BINARY_ADD','BINARY_SUBTRACT',
-    'BINARY_LSHIFT','BINARY_RSHIFT','BINARY_AND','BINARY_XOR', 'BINARY_OR',
-    'STORE_MAP', 'LOAD_NAME', 'CALL_FUNCTION', 'COMPARE_OP', 'LOAD_ATTR',
-    'STORE_NAME', 'GET_ITER', 'FOR_ITER', 'LIST_APPEND', 'JUMP_ABSOLUTE',
-    'DELETE_NAME', 'JUMP_IF_TRUE', 'JUMP_IF_FALSE', 'JUMP_IF_FALSE_OR_POP',
-    'JUMP_IF_TRUE_OR_POP', 'POP_JUMP_IF_FALSE', 'POP_JUMP_IF_TRUE',
-    'BINARY_SUBSCR',
-    ] if x in dis.opmap)
+        'POP_TOP', 'ROT_TWO', 'ROT_THREE', 'ROT_FOUR', 'DUP_TOP', 'BUILD_LIST',
+        'BUILD_MAP', 'BUILD_TUPLE', 'LOAD_CONST', 'RETURN_VALUE',
+        'STORE_SUBSCR', 'UNARY_POSITIVE', 'UNARY_NEGATIVE', 'UNARY_NOT',
+        'UNARY_INVERT', 'BINARY_POWER', 'BINARY_MULTIPLY', 'BINARY_DIVIDE',
+        'BINARY_FLOOR_DIVIDE', 'BINARY_TRUE_DIVIDE', 'BINARY_MODULO',
+        'BINARY_ADD', 'BINARY_SUBTRACT', 'BINARY_LSHIFT', 'BINARY_RSHIFT',
+        'BINARY_AND', 'BINARY_XOR', 'BINARY_OR', 'STORE_MAP', 'LOAD_NAME',
+        'CALL_FUNCTION', 'COMPARE_OP', 'LOAD_ATTR', 'STORE_NAME', 'GET_ITER',
+        'FOR_ITER', 'LIST_APPEND', 'JUMP_ABSOLUTE', 'DELETE_NAME',
+        'JUMP_IF_TRUE', 'JUMP_IF_FALSE', 'JUMP_IF_FALSE_OR_POP',
+        'JUMP_IF_TRUE_OR_POP', 'POP_JUMP_IF_FALSE', 'POP_JUMP_IF_TRUE',
+        'BINARY_SUBSCR', 'JUMP_FORWARD',
+        ] if x in dis.opmap)
+
 
 @memoize(1000)
 def _compile_source(source):
@@ -593,6 +394,7 @@ def _compile_source(source):
             raise ValueError('opcode %s not allowed' % dis.opname[code])
     return comp
 
+
 def safe_eval(source, data=None):
     if '__subclasses__' in source:
         raise ValueError('__subclasses__ not allowed')
@@ -609,6 +411,7 @@ def safe_eval(source, data=None):
         'round': round,
         'Decimal': Decimal,
         }}, data)
+
 
 def reduce_domain(domain):
     '''

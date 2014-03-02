@@ -5,29 +5,30 @@
 """
 import logging
 import logging.handlers
-import sys, os, signal
+import sys
+import os
+import signal
 import time
-from trytond.config import CONFIG
 from getpass import getpass
-try:
-    import hashlib
-except ImportError:
-    hashlib = None
-    import sha
 import threading
-import string
-import random
+
+from trytond.config import CONFIG
+from trytond import backend
+from trytond.pool import Pool
+from trytond.monitor import monitor
+from .transaction import Transaction
 
 
 class TrytonServer(object):
 
-    def __init__(self):
+    def __init__(self, options):
         format = '[%(asctime)s] %(levelname)s:%(name)s:%(message)s'
         datefmt = '%a %b %d %H:%M:%S %Y'
-        logging.basicConfig(level=logging.DEBUG, format=format,
+        logging.basicConfig(level=logging.INFO, format=format,
                 datefmt=datefmt)
 
-        CONFIG.parse()
+        CONFIG.update_etc(options['configfile'])
+        CONFIG.update_cmdline(options)
 
         if CONFIG['logfile']:
             logf = CONFIG['logfile']
@@ -40,9 +41,9 @@ class TrytonServer(object):
                     logf, 'D', 1, 30)
                 handler.rolloverAt -= diff
             except Exception, exception:
-                sys.stderr.write(\
-                        "ERROR: couldn't create the logfile directory:" \
-                        + str(exception))
+                sys.stderr.write(
+                    "ERROR: couldn't create the logfile directory:"
+                    + str(exception))
             else:
                 formatter = logging.Formatter(format, datefmt)
                 # tell the handler to use this format
@@ -62,51 +63,63 @@ class TrytonServer(object):
         self.logger = logging.getLogger("server")
 
         if CONFIG.configfile:
-            self.logger.info('using %s as configuration file' % \
-                    CONFIG.configfile)
+            self.logger.info('using %s as configuration file'
+                % CONFIG.configfile)
         else:
             self.logger.info('using default configuration')
         self.logger.info('initialising distributed objects services')
+        self.xmlrpcd = []
+        self.jsonrpcd = []
+        self.webdavd = []
 
     def run(self):
         "Run the server and never return"
-        from trytond.backend import Database
-        from trytond.pool import Pool
-        from trytond.monitor import monitor
-
-        update = False
+        update = bool(CONFIG['init'] or CONFIG['update'])
         init = {}
+
+        signal.signal(signal.SIGINT, lambda *a: self.stop())
+        signal.signal(signal.SIGTERM, lambda *a: self.stop())
+        if hasattr(signal, 'SIGQUIT'):
+            signal.signal(signal.SIGQUIT, lambda *a: self.stop())
+        if hasattr(signal, 'SIGUSR1'):
+            signal.signal(signal.SIGUSR1, lambda *a: self.restart())
+
+        if CONFIG['pidfile']:
+            with open(CONFIG['pidfile'], 'w') as fd_pid:
+                fd_pid.write("%d" % (os.getpid()))
 
         if not CONFIG["db_name"] \
                 and bool(CONFIG['init'] or CONFIG['update']):
             raise Exception('Missing database option!')
 
+        if not update:
+            self.start_servers()
+
         for db_name in CONFIG["db_name"]:
             init[db_name] = False
-            database = Database(db_name).connect()
-            cursor = database.cursor()
-
-            if CONFIG['init']:
-                if not cursor.test():
-                    self.logger.info("init db")
-                    Database.init(cursor)
-                    init[db_name] = True
-                cursor.commit()
-                cursor.close()
-            elif not cursor.test():
-                raise Exception("'%s' is not a Tryton database!" % db_name)
-
-        Pool.start()
+            with Transaction().start(db_name, 0) as transaction:
+                cursor = transaction.cursor
+                if CONFIG['init']:
+                    if not cursor.test():
+                        self.logger.info("init db")
+                        backend.get('Database').init(cursor)
+                        init[db_name] = True
+                    cursor.commit()
+                elif not cursor.test():
+                    raise Exception("'%s' is not a Tryton database!" % db_name)
 
         for db_name in CONFIG["db_name"]:
-            cursor = Database(db_name).connect().cursor()
-            if not cursor.test():
-                raise Exception("'%s' is not a Tryton database!" % db_name)
-            cursor.execute('SELECT code FROM ir_lang ' \
-                    'WHERE translatable')
-            lang = [x[0] for x in cursor.fetchall()]
-            cursor.close()
-            update = bool(CONFIG['init'] or CONFIG['update'])
+            if update:
+                with Transaction().start(db_name, 0) as transaction:
+                    cursor = transaction.cursor
+                    if not cursor.test():
+                        raise Exception("'%s' is not a Tryton database!"
+                            % db_name)
+                    cursor.execute('SELECT code FROM ir_lang '
+                        'WHERE translatable')
+                    lang = [x[0] for x in cursor.fetchall()]
+            else:
+                lang = None
             Pool(db_name).init(update=update, lang=lang)
 
         for kind in ('init', 'update'):
@@ -114,137 +127,123 @@ class TrytonServer(object):
 
         for db_name in CONFIG['db_name']:
             if init[db_name]:
-                while True:
-                    password = getpass('Admin Password for %s: ' % db_name)
-                    password2 = getpass('Admin Password Confirmation: ')
-                    if password != password2:
-                        sys.stderr.write('Admin Password Confirmation ' \
-                                'doesn\'t match Admin Password!\n')
-                        continue
-                    if not password:
-                        sys.stderr.write('Admin Password is required!\n')
-                        continue
-                    break
+                # try to read password from environment variable
+                # TRYTONPASSFILE, empty TRYTONPASSFILE ignored
+                passpath = os.getenv('TRYTONPASSFILE')
+                password = ''
+                if passpath:
+                    try:
+                        with open(passpath) as passfile:
+                            password = passfile.readline()[:-1]
+                    except Exception, err:
+                        sys.stderr.write('Can not read password '
+                            'from "%s": "%s"\n' % (passpath, err))
 
-                database = Database(db_name).connect()
-                cursor = database.cursor()
-                salt = ''.join(random.sample(string.letters + string.digits, 8))
-                password += salt
-                if hashlib:
-                    password = hashlib.sha1(password).hexdigest()
-                else:
-                    password = sha.new(password).hexdigest()
-                cursor.execute('UPDATE res_user ' \
-                        'SET password = %s, salt = %s ' \
-                        'WHERE login = \'admin\'', (password, salt))
-                cursor.commit()
-                cursor.close()
+                if not password:
+                    while True:
+                        password = getpass('Admin Password for %s: ' % db_name)
+                        password2 = getpass('Admin Password Confirmation: ')
+                        if password != password2:
+                            sys.stderr.write('Admin Password Confirmation '
+                                'doesn\'t match Admin Password!\n')
+                            continue
+                        if not password:
+                            sys.stderr.write('Admin Password is required!\n')
+                            continue
+                        break
+
+                with Transaction().start(db_name, 0) as transaction:
+                    pool = Pool()
+                    User = pool.get('res.user')
+                    admin, = User.search([('login', '=', 'admin')])
+                    User.write([admin], {
+                            'password': password,
+                            })
+                    transaction.cursor.commit()
 
         if update:
             self.logger.info('Update/Init succeed!')
             logging.shutdown()
             sys.exit(0)
 
-        # Launch Server
-        if CONFIG['xmlrpc']:
-            from trytond.protocols.xmlrpc import XMLRPCDaemon
-            xmlrpcd = XMLRPCDaemon(CONFIG['interface'], CONFIG['xmlport'],
-                    CONFIG['secure_xmlrpc'])
-            self.logger.info("starting XML-RPC%s protocol, port %d" % \
-                    (CONFIG['secure_xmlrpc'] and ' Secure' or '',
-                        CONFIG['xmlport']))
+        threads = {}
+        while True:
+            if CONFIG['cron']:
+                for dbname in Pool.database_list():
+                    thread = threads.get(dbname)
+                    if thread and thread.is_alive():
+                        continue
+                    pool = Pool(dbname)
+                    if not pool.lock.acquire(0):
+                        continue
+                    try:
+                        if 'ir.cron' not in pool.object_name_list():
+                            continue
+                        Cron = pool.get('ir.cron')
+                    finally:
+                        pool.lock.release()
+                    thread = threading.Thread(
+                            target=Cron.run,
+                            args=(dbname,), kwargs={})
+                    thread.start()
+                    threads[dbname] = thread
+            if CONFIG['auto_reload']:
+                for _ in range(60):
+                    if monitor():
+                        self.restart()
+                    time.sleep(1)
+            else:
+                time.sleep(60)
 
+    def start_servers(self):
+        # Launch Server
         if CONFIG['jsonrpc']:
             from trytond.protocols.jsonrpc import JSONRPCDaemon
-            jsonrpcd = JSONRPCDaemon(CONFIG['interface'], CONFIG['jsonport'],
-                    CONFIG['secure_jsonrpc'])
-            self.logger.info("starting JSON-RPC%s protocol, port %d" % \
-                    (CONFIG['secure_jsonrpc'] and ' Secure' or '',
-                        CONFIG['jsonport']))
+            for hostname, port in CONFIG['jsonrpc']:
+                self.jsonrpcd.append(JSONRPCDaemon(hostname, port,
+                    CONFIG['ssl_jsonrpc']))
+                self.logger.info("starting JSON-RPC%s protocol on %s:%d" %
+                    (CONFIG['ssl_jsonrpc'] and ' SSL' or '', hostname or '*',
+                        port))
 
-        if CONFIG['netrpc']:
-            from trytond.protocols.netrpc import NetRPCServerThread
-            netrpcd = NetRPCServerThread(CONFIG['interface'], CONFIG['netport'],
-                    CONFIG['secure_netrpc'])
-            self.logger.info("starting NetRPC%s protocol, port %d" % \
-                    (CONFIG['secure_netrpc']  and ' Secure' or '',
-                        CONFIG['netport']))
+        if CONFIG['xmlrpc']:
+            from trytond.protocols.xmlrpc import XMLRPCDaemon
+            for hostname, port in CONFIG['xmlrpc']:
+                self.xmlrpcd.append(XMLRPCDaemon(hostname, port,
+                    CONFIG['ssl_xmlrpc']))
+                self.logger.info("starting XML-RPC%s protocol on %s:%d" %
+                    (CONFIG['ssl_xmlrpc'] and ' SSL' or '', hostname or '*',
+                        port))
 
         if CONFIG['webdav']:
             from trytond.protocols.webdav import WebDAVServerThread
-            webdavd = WebDAVServerThread(CONFIG['interface'],
-                    CONFIG['webdavport'], CONFIG['secure_webdav'])
-            self.logger.info("starting WebDAV%s protocol, port %d" % \
-                    (CONFIG['secure_webdav'] and ' Secure' or '',
-                        CONFIG['webdavport']))
+            for hostname, port in CONFIG['webdav']:
+                self.webdavd.append(WebDAVServerThread(hostname, port,
+                    CONFIG['ssl_webdav']))
+                self.logger.info("starting WebDAV%s protocol on %s:%d" %
+                    (CONFIG['ssl_webdav'] and ' SSL' or '', hostname or '*',
+                        port))
 
-        def handler(signum, frame):
-            if hasattr(signal, 'SIGUSR1'):
-                if signum == signal.SIGUSR1:
-                    Pool.start()
-                    return
-            if CONFIG['netrpc']:
-                netrpcd.stop()
-            if CONFIG['xmlrpc']:
-                xmlrpcd.stop()
-            if CONFIG['jsonrpc']:
-                jsonrpcd.stop()
-            if CONFIG['webdav']:
-                webdavd.stop()
+        for servers in (self.xmlrpcd, self.jsonrpcd, self.webdavd):
+            for server in servers:
+                server.start()
+
+    def stop(self, exit=True):
+        for servers in (self.xmlrpcd, self.jsonrpcd, self.webdavd):
+            for server in servers:
+                server.stop()
+                server.join()
+        if exit:
             if CONFIG['pidfile']:
                 os.unlink(CONFIG['pidfile'])
-            for thread in threading.enumerate():
-                if thread == threading.currentThread():
-                    continue
-                thread.join()
             logging.getLogger('server').info('stopped')
             logging.shutdown()
             sys.exit(0)
 
-        if CONFIG['pidfile']:
-            fd_pid = open(CONFIG['pidfile'], 'w')
-            pidtext = "%d" % (os.getpid())
-            fd_pid.write(pidtext)
-            fd_pid.close()
-
-        signal.signal(signal.SIGINT, handler)
-        signal.signal(signal.SIGTERM, handler)
-        if hasattr(signal, 'SIGQUIT'):
-            signal.signal(signal.SIGQUIT, handler)
-        if hasattr(signal, 'SIGUSR1'):
-            signal.signal(signal.SIGUSR1, handler)
-
-        self.logger.info('waiting for connections...')
-        if CONFIG['netrpc']:
-            netrpcd.start()
-        if CONFIG['xmlrpc']:
-            xmlrpcd.start()
-        if CONFIG['jsonrpc']:
-            jsonrpcd.start()
-        if CONFIG['webdav']:
-            webdavd.start()
-
-        if CONFIG['psyco']:
-            import psyco
-            psyco.full()
-
-        while True:
-            if CONFIG['auto_reload'] and monitor():
-                try:
-                    Pool.start()
-                except:
-                    pass
-            for dbname in Pool.database_list():
-                pool = Pool(dbname)
-                if 'ir.cron' not in pool.object_name_list():
-                    continue
-                cron_obj = pool.get('ir.cron')
-                thread = threading.Thread(
-                        target=cron_obj.pool_jobs,
-                        args=(dbname,), kwargs={})
-                thread.start()
-            time.sleep(60)
-
-if __name__ == "__main__":
-    SERVER = TrytonServer()
-    SERVER.run()
+    def restart(self):
+        self.stop(False)
+        args = ([sys.executable] + ['-W%s' % o for o in sys.warnoptions]
+            + sys.argv)
+        if sys.platform == "win32":
+            args = ['"%s"' % arg for arg in args]
+        os.execv(sys.executable, args)

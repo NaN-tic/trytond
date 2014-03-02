@@ -3,17 +3,16 @@
 from trytond.protocols.sslsocket import SSLSocket
 from trytond.protocols.dispatcher import dispatch
 from trytond.config import CONFIG
-from trytond.protocols.datatype import Float
+from trytond.protocols.common import daemon, RegisterHandlerMixin
+from trytond.exceptions import UserError, UserWarning, NotLogged, \
+    ConcurrencyException
 import SimpleXMLRPCServer
 import SimpleHTTPServer
 import SocketServer
-import threading
 import traceback
 import socket
 import sys
 import os
-import gzip
-import StringIO
 try:
     import fcntl
 except ImportError:
@@ -22,10 +21,17 @@ import posixpath
 import urllib
 import datetime
 from decimal import Decimal
-if sys.version_info < (2, 6):
+try:
     import simplejson as json
-else:
+except ImportError:
     import json
+import base64
+import encodings
+try:
+    from cStringIO import StringIO
+except ImportError:
+    from StringIO import StringIO
+
 
 def object_hook(dct):
     if '__class__' in dct:
@@ -34,9 +40,21 @@ def object_hook(dct):
                     dct['hour'], dct['minute'], dct['second'])
         elif dct['__class__'] == 'date':
             return datetime.date(dct['year'], dct['month'], dct['day'])
+        elif dct['__class__'] == 'time':
+            return datetime.time(dct['hour'], dct['minute'], dct['second'])
+        elif dct['__class__'] == 'buffer':
+            return buffer(base64.decodestring(dct['base64']))
+        elif dct['__class__'] == 'Decimal':
+            return Decimal(dct['decimal'])
     return dct
 
+
 class JSONEncoder(json.JSONEncoder):
+
+    def __init__(self, *args, **kwargs):
+        super(JSONEncoder, self).__init__(*args, **kwargs)
+        # Force to use our custom decimal with simplejson
+        self.use_decimal = False
 
     def default(self, obj):
         if isinstance(obj, datetime.date):
@@ -54,8 +72,20 @@ class JSONEncoder(json.JSONEncoder):
                     'month': obj.month,
                     'day': obj.day,
                     }
+        elif isinstance(obj, datetime.time):
+            return {'__class__': 'time',
+                'hour': obj.hour,
+                'minute': obj.minute,
+                'second': obj.second,
+                }
+        elif isinstance(obj, buffer):
+            return {'__class__': 'buffer',
+                'base64': base64.encodestring(obj),
+                }
         elif isinstance(obj, Decimal):
-            return float(obj)
+            return {'__class__': 'Decimal',
+                'decimal': str(obj),
+                }
         return super(JSONEncoder, self).default(obj)
 
 
@@ -67,7 +97,7 @@ class SimpleJSONRPCDispatcher(SimpleXMLRPCServer.SimpleXMLRPCDispatcher):
     reason to instantiate this class directly.
     """
 
-    def _marshaled_dispatch(self, data, dispatch_method=None):
+    def _marshaled_dispatch(self, data, dispatch_method=None, path=None):
         """Dispatches an JSON-RPC method from marshalled (JSON) data.
 
         JSON-RPC methods are dispatched from the marshalled (JSON) data
@@ -78,7 +108,7 @@ class SimpleJSONRPCDispatcher(SimpleXMLRPCServer.SimpleXMLRPCDispatcher):
         existing method through subclassing is the prefered means
         of changing method dispatch behavior.
         """
-        rawreq = json.loads(data, object_hook=object_hook, parse_float=Float)
+        rawreq = json.loads(data, object_hook=object_hook)
 
         req_id = rawreq.get('id', 0)
         method = rawreq['method']
@@ -92,14 +122,11 @@ class SimpleJSONRPCDispatcher(SimpleXMLRPCServer.SimpleXMLRPCDispatcher):
                 response['result'] = dispatch_method(method, params)
             else:
                 response['result'] = self._dispatch(method, params)
-        except:
-            tb_s = ''
-            for line in traceback.format_exception(*sys.exc_info()):
-                try:
-                    line = line.encode('utf-8', 'ignore')
-                except:
-                    continue
-                tb_s += line
+        except (UserError, UserWarning, NotLogged,
+                ConcurrencyException), exception:
+            response['error'] = exception.args
+        except Exception:
+            tb_s = ''.join(traceback.format_exception(*sys.exc_info()))
             for path in sys.path:
                 tb_s = tb_s.replace(path, '')
             if CONFIG['debug_mode']:
@@ -107,7 +134,7 @@ class SimpleJSONRPCDispatcher(SimpleXMLRPCServer.SimpleXMLRPCDispatcher):
                 traceb = sys.exc_info()[2]
                 pdb.post_mortem(traceb)
             # report exception back to server
-            response['error'] = "%s:\n%s" % (sys.exc_value, tb_s)
+            response['error'] = (str(sys.exc_value), tb_s)
 
         return json.dumps(response, cls=JSONEncoder)
 
@@ -129,7 +156,8 @@ class GenericJSONRPCRequestHandler:
         return res
 
 
-class SimpleJSONRPCRequestHandler(GenericJSONRPCRequestHandler,
+class SimpleJSONRPCRequestHandler(RegisterHandlerMixin,
+        GenericJSONRPCRequestHandler,
         SimpleXMLRPCServer.SimpleXMLRPCRequestHandler,
         SimpleHTTPServer.SimpleHTTPRequestHandler):
     """Simple JSON-RPC request handler class.
@@ -137,71 +165,27 @@ class SimpleJSONRPCRequestHandler(GenericJSONRPCRequestHandler,
     Handles all HTTP POST requests and attempts to decode them as
     JSON-RPC requests.
     """
+    protocol_version = "HTTP/1.1"
     rpc_paths = None
-    encode_threshold = 1400 # common MTU
+    encode_threshold = 1400  # common MTU
 
-    # Copy from SimpleXMLRPCServer.py with gzip encoding added
-    def do_POST(self):
-        """Handles the HTTP POST request.
+    def send_header(self, keyword, value):
+        if keyword == 'Content-type' and value == 'text/xml':
+            value = 'application/json-rpc'
+        SimpleXMLRPCServer.SimpleXMLRPCRequestHandler.send_header(self,
+            keyword, value)
 
-        Attempts to interpret all HTTP POST requests as JSON-RPC calls,
-        which are forwarded to the server's _dispatch method for handling.
-        """
-
-        # Check that the path is legal
-        if not self.is_rpc_path_valid():
-            self.report_404()
+    def do_GET(self):
+        if self.is_tryton_url(self.path):
+            self.send_tryton_url(self.path)
             return
+        SimpleHTTPServer.SimpleHTTPRequestHandler.do_GET(self)
 
-        try:
-            # Get arguments by reading body of request.
-            # We read this in chunks to avoid straining
-            # socket.read(); around the 10 or 15Mb mark, some platforms
-            # begin to have problems (bug #792570).
-            max_chunk_size = 10*1024*1024
-            size_remaining = int(self.headers["content-length"])
-            L = []
-            while size_remaining:
-                chunk_size = min(size_remaining, max_chunk_size)
-                L.append(self.rfile.read(chunk_size))
-                size_remaining -= len(L[-1])
-            data = ''.join(L)
-
-            # In previous versions of SimpleXMLRPCServer, _dispatch
-            # could be overridden in this class, instead of in
-            # SimpleXMLRPCDispatcher. To maintain backwards compatibility,
-            # check to see if a subclass implements _dispatch and dispatch
-            # using that method if present.
-            response = self.server._marshaled_dispatch(
-                    data, getattr(self, '_dispatch', None)
-                )
-        except: # This should only happen if the module is buggy
-            # internal error, report as HTTP server error
-            self.send_response(500)
-            self.end_headers()
-        else:
-            # got a valid JSON RPC response
-            self.send_response(200)
-            self.send_header("Content-type", "application/json-rpc")
-
-            # Handle gzip encoding
-            if 'gzip' in self.headers.get('Accept-Encoding', '').split(',') \
-                    and len(response) > self.encode_threshold:
-                buffer = StringIO.StringIO()
-                output = gzip.GzipFile(mode='wb', fileobj=buffer)
-                output.write(response)
-                output.close()
-                buffer.seek(0)
-                response = buffer.getvalue()
-                self.send_header('Content-Encoding', 'gzip')
-
-            self.send_header("Content-length", str(len(response)))
-            self.end_headers()
-            self.wfile.write(response)
-
-            # shut down the connection
-            self.wfile.flush()
-            self.connection.shutdown(1)
+    def do_HEAD(self):
+        if self.is_tryton_url(self.path):
+            self.send_tryton_url(self.path)
+            return
+        SimpleHTTPServer.SimpleHTTPRequestHandler.do_HEAD(self)
 
     def translate_path(self, path):
         """Translate a /-separated PATH to the local filename syntax.
@@ -221,17 +205,60 @@ class SimpleJSONRPCRequestHandler(GenericJSONRPCRequestHandler,
         for word in words:
             drive, word = os.path.splitdrive(word)
             head, word = os.path.split(word)
-            if word in (os.curdir, os.pardir): continue
+            if word in (os.curdir, os.pardir):
+                continue
             path = os.path.join(path, word)
         return path
+
+    def is_tryton_url(self, path):
+        words = path.split('/')
+        try:
+            return words[2] in ('model', 'wizard', 'report')
+        except IndexError:
+            return False
+
+    def send_tryton_url(self, path):
+        self.send_response(300)
+        hostname = CONFIG['hostname'] or unicode(socket.getfqdn(), 'utf8')
+        hostname = '.'.join(encodings.idna.ToASCII(part) for part in
+            hostname.split('.'))
+        values = {
+            'hostname': hostname,
+            'path': path,
+            }
+        content = StringIO()
+        content.write('<html')
+        content.write('<head>')
+        content.write('<meta http-equiv="Refresh" '
+            'content="0;url=tryton://%(hostname)s%(path)s"/>' % values)
+        content.write('<title>Moved</title>')
+        content.write('</head>')
+        content.write('<body>')
+        content.write('<h1>Moved</h1>')
+        content.write('<p>This page has moved to '
+            '<a href="tryton://%(hostname)s%(path)s">'
+            'tryton://%(hostname)s%(path)s</a>.</p>' % values)
+        content.write('</body>')
+        content.write('</html>')
+        length = content.tell()
+        content.seek(0)
+        self.send_header('Location', 'tryton://%(hostname)s%(path)s' % values)
+        self.send_header('Content-type', 'text/html')
+        self.send_header('Content-Length', str(length))
+        self.end_headers()
+        self.copyfile(content, self.wfile)
+        content.close()
+
+SimpleJSONRPCRequestHandler.extensions_map.update({
+        '.svg': 'image/svg+xml',
+        })
 
 
 class SecureJSONRPCRequestHandler(SimpleJSONRPCRequestHandler):
 
     def setup(self):
-        self.connection = SSLSocket(self.request)
-        self.rfile = socket._fileobject(self.request, "rb", self.rbufsize)
-        self.wfile = socket._fileobject(self.request, "wb", self.wbufsize)
+        self.request = SSLSocket(self.request)
+        SimpleJSONRPCRequestHandler.setup(self)
 
 
 class SimpleJSONRPCServer(SocketServer.TCPServer,
@@ -256,6 +283,7 @@ class SimpleJSONRPCServer(SocketServer.TCPServer,
     def __init__(self, addr, requestHandler=SimpleJSONRPCRequestHandler,
             logRequests=True, allow_none=False, encoding=None,
             bind_and_activate=True):
+        self.handlers = set()
         self.logRequests = logRequests
 
         SimpleJSONRPCDispatcher.__init__(self, allow_none, encoding)
@@ -273,10 +301,29 @@ class SimpleJSONRPCServer(SocketServer.TCPServer,
             flags |= fcntl.FD_CLOEXEC
             fcntl.fcntl(self.fileno(), fcntl.F_SETFD, flags)
 
+    def server_close(self):
+        SocketServer.TCPServer.server_close(self)
+        for handler in self.handlers:
+            self.shutdown_request(handler.request)
+
+    if sys.version_info[:2] <= (2, 6):
+
+        def shutdown_request(self, request):
+            """Called to shutdown and close an individual request."""
+            try:
+                #explicitly shutdown.  socket.close() merely releases
+                #the socket and waits for GC to perform the actual close.
+                request.shutdown(socket.SHUT_WR)
+            except socket.error:
+                pass  # some platforms may raise ENOTCONN here
+            self.close_request(request)
+
 
 class SimpleThreadedJSONRPCServer(SocketServer.ThreadingMixIn,
         SimpleJSONRPCServer):
     timeout = 1
+    daemon_threads = True
+    disable_nagle_algorithm = True
 
     def server_bind(self):
         self.socket.setsockopt(socket.SOL_SOCKET,
@@ -293,10 +340,10 @@ class SimpleThreadedJSONRPCServer6(SimpleThreadedJSONRPCServer):
 class SecureThreadedJSONRPCServer(SimpleThreadedJSONRPCServer):
 
     def __init__(self, server_address, HandlerClass, logRequests=1):
-        SimpleThreadedJSONRPCServer.__init__(self, server_address, HandlerClass,
-                logRequests)
-        self.socket = SSLSocket(socket.socket(self.address_family,
-            self.socket_type))
+        SimpleThreadedJSONRPCServer.__init__(self, server_address,
+            HandlerClass, logRequests)
+        self.socket = socket.socket(self.address_family,
+            self.socket_type)
         self.server_bind()
         self.server_activate()
 
@@ -305,42 +352,18 @@ class SecureThreadedJSONRPCServer6(SecureThreadedJSONRPCServer):
     address_family = socket.AF_INET6
 
 
-class JSONRPCDaemon(threading.Thread):
+class JSONRPCDaemon(daemon):
 
     def __init__(self, interface, port, secure=False):
-        threading.Thread.__init__(self)
-        self.secure = secure
-        self.running = False
-        ipv6 = False
-        if socket.has_ipv6:
-            try:
-                socket.getaddrinfo(interface or None, port, socket.AF_INET6)
-                ipv6 = True
-            except:
-                pass
-        if secure:
+        daemon.__init__(self, interface, port, secure, name='JSONRPCDaemon')
+        if self.secure:
             handler_class = SecureJSONRPCRequestHandler
             server_class = SecureThreadedJSONRPCServer
-            if ipv6:
+            if self.ipv6:
                 server_class = SecureThreadedJSONRPCServer6
         else:
             handler_class = SimpleJSONRPCRequestHandler
             server_class = SimpleThreadedJSONRPCServer
-            if ipv6:
+            if self.ipv6:
                 server_class = SimpleThreadedJSONRPCServer6
         self.server = server_class((interface, port), handler_class, 0)
-
-    def stop(self):
-        self.running = False
-        if os.name != 'nt':
-            if hasattr(socket, 'SHUT_RDWR'):
-                self.server.socket.shutdown(socket.SHUT_RDWR)
-            else:
-                self.server.socket.shutdown(2)
-        self.server.socket.close()
-
-    def run(self):
-        self.running = True
-        while self.running:
-            self.server.handle_request()
-        return True

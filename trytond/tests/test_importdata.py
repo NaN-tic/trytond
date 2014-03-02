@@ -1,23 +1,24 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-
 import unittest
-from trytond.tests.test_tryton import POOL, DB, USER, CONTEXT, install_module
+from trytond.tests.test_tryton import POOL, DB_NAME, USER, CONTEXT, \
+        install_module
+from trytond.transaction import Transaction
 
 
 class ImportDataTestCase(unittest.TestCase):
-    '''
-    Test import_data.
-    '''
+    'Test import_data'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.boolean = POOL.get('test.import_data.boolean')
         self.integer = POOL.get('test.import_data.integer')
+        self.integer_required = POOL.get('test.import_data.integer_required')
         self.float = POOL.get('test.import_data.float')
+        self.float_required = POOL.get('test.import_data.float_required')
         self.numeric = POOL.get('test.import_data.numeric')
+        self.numeric_required = POOL.get('test.import_data.numeric_required')
         self.char = POOL.get('test.import_data.char')
         self.text = POOL.get('test.import_data.text')
         self.sha = POOL.get('test.import_data.sha')
@@ -30,383 +31,459 @@ class ImportDataTestCase(unittest.TestCase):
         self.reference = POOL.get('test.import_data.reference')
 
     def test0010boolean(self):
-        '''
-        Test boolean.
-        '''
-        cursor = DB.cursor()
+        'Test boolean'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['True']]), (1, 0, 0, 0))
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['True']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['1']]), (1, 0, 0, 0))
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['False']]), (1, 0, 0, 0))
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['False']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['0']]), (1, 0, 0, 0))
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['0']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['True'], ['False']]), (2, 0, 0, 0))
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['True'], ['False']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.boolean.import_data(['boolean'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.boolean.import_data(cursor, USER, ['boolean'],
-            [['foo']], CONTEXT)[0] == -1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0020integer(self):
-        '''
-        Test integer.
-        '''
-        cursor = DB.cursor()
+        'Test integer'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['1']]), (1, 0, 0, 0))
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['-1']]), (1, 0, 0, 0))
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['-1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['1'], ['2']]), (2, 0, 0, 0))
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['1'], ['2']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['1.1']])[0], -1)
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['1.1']], CONTEXT)[0] == -1)
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['-1.1']])[0], -1)
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['-1.1']], CONTEXT)[0] == -1)
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.integer.import_data(cursor, USER, ['integer'],
-            [['foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.integer.import_data(['integer'],
+                [['0']]), (1, 0, 0, 0))
 
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
+
+    def test0021integer_required(self):
+        'Test required integer'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['-1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['']])[0], -1)
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['1'], ['2']]), (2, 0, 0, 0))
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['1.1']])[0], -1)
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['-1.1']])[0], -1)
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['foo']])[0], -1)
+
+            self.assertEqual(self.integer_required.import_data(['integer'],
+                [['0']]), (1, 0, 0, 0))
+
+            transaction.cursor.rollback()
 
     def test0030float(self):
-        '''
-        Test float.
-        '''
-        cursor = DB.cursor()
+        'Test float'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.float.import_data(['float'],
+                [['1.1']]), (1, 0, 0, 0))
 
-        self.assert_(self.float.import_data(cursor, USER, ['float'], [['1.1']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.float.import_data(['float'],
+                [['-1.1']]), (1, 0, 0, 0))
 
-        self.assert_(self.float.import_data(cursor, USER, ['float'],
-            [['-1.1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.float.import_data(['float'],
+                [['1']]), (1, 0, 0, 0))
 
-        self.assert_(self.float.import_data(cursor, USER, ['float'], [['1']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.float.import_data(['float'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.float.import_data(cursor, USER, ['float'], [['']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.float.import_data(['float'],
+                [['1.1'], ['2.2']]), (2, 0, 0, 0))
 
-        self.assert_(self.float.import_data(cursor, USER, ['float'], [['1.1'],
-            ['2.2']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.float.import_data(['float'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.float.import_data(cursor, USER, ['float'], [['foo']],
-            CONTEXT)[0] == -1)
+            self.assertEqual(self.float.import_data(['float'],
+                [['0']]), (1, 0, 0, 0))
 
-        cursor.rollback()
-        cursor.close()
+            self.assertEqual(self.float.import_data(['float'],
+                [['0.0']]), (1, 0, 0, 0))
+
+            transaction.cursor.rollback()
+
+    def test0031float_required(self):
+        'Test required float'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['1.1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['-1.1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['']])[0], -1)
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['1.1'], ['2.2']]), (2, 0, 0, 0))
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['foo']])[0], -1)
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['0']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.float_required.import_data(['float'],
+                [['0.0']]), (1, 0, 0, 0))
+
+            transaction.cursor.rollback()
 
     def test0040numeric(self):
-        '''
-        Test numeric.
-        '''
-        cursor = DB.cursor()
+        'Test numeric'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['1.1']]), (1, 0, 0, 0))
 
-        self.assert_(self.numeric.import_data(cursor, USER, ['numeric'],
-            [['1.1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['-1.1']]), (1, 0, 0, 0))
 
-        self.assert_(self.numeric.import_data(cursor, USER, ['numeric'],
-            [['-1.1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['1']]), (1, 0, 0, 0))
 
-        self.assert_(self.numeric.import_data(cursor, USER, ['numeric'],
-            [['1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.numeric.import_data(cursor, USER, ['numeric'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['1.1'], ['2.2']]), (2, 0, 0, 0))
 
-        self.assert_(self.numeric.import_data(cursor, USER, ['numeric'],
-            [['1.1'], ['2.2']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.numeric.import_data(cursor, USER, ['numeric'],
-            [['foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['0']]), (1, 0, 0, 0))
 
-        cursor.rollback()
-        cursor.close()
+            self.assertEqual(self.numeric.import_data(['numeric'],
+                [['0.0']]), (1, 0, 0, 0))
+
+            transaction.cursor.rollback()
+
+    def test0041numeric_required(self):
+        'Test required numeric'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['1.1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['-1.1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['1']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['']])[0], -1)
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['1.1'], ['2.2']]), (2, 0, 0, 0))
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['foo']])[0], -1)
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['0']]), (1, 0, 0, 0))
+
+            self.assertEqual(self.numeric_required.import_data(['numeric'],
+                [['0.0']]), (1, 0, 0, 0))
+
+            transaction.cursor.rollback()
 
     def test0050char(self):
-        '''
-        Test char.
-        '''
-        cursor = DB.cursor()
+        'Test char'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.char.import_data(['char'],
+                [['test']]), (1, 0, 0, 0))
 
-        self.assert_(self.char.import_data(cursor, USER, ['char'], [['test']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.char.import_data(['char'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.char.import_data(cursor, USER, ['char'], [['']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.char.import_data(['char'],
+                [['test'], ['foo'], ['bar']]), (3, 0, 0, 0))
 
-        self.assert_(self.char.import_data(cursor, USER, ['char'], [['test'],
-            ['foo'], ['bar']], CONTEXT) == (3, 0, 0, 0))
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0060text(self):
-        '''
-        Test text.
-        '''
-        cursor = DB.cursor()
+        'Test text'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.text.import_data(['text'],
+                [['test']]), (1, 0, 0, 0))
 
-        self.assert_(self.text.import_data(cursor, USER, ['text'], [['test']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.text.import_data(['text'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.text.import_data(cursor, USER, ['text'], [['']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.text.import_data(['text'],
+                [['test'], ['foo'], ['bar']]), (3, 0, 0, 0))
 
-        self.assert_(self.text.import_data(cursor, USER, ['text'], [['test'],
-            ['foo'], ['bar']], CONTEXT) == (3, 0, 0, 0))
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0070sha(self):
-        '''
-        Test sha.
-        '''
-        cursor = DB.cursor()
+        'Test sha'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.sha.import_data(['sha'],
+                [['test']]), (1, 0, 0, 0))
 
-        self.assert_(self.sha.import_data(cursor, USER, ['sha'], [['test']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.sha.import_data(['sha'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.sha.import_data(cursor, USER, ['sha'], [['']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.sha.import_data(['sha'],
+                [['test'], ['foo']]), (2, 0, 0, 0))
 
-        self.assert_(self.sha.import_data(cursor, USER, ['sha'], [['test'],
-            ['foo']], CONTEXT) == (2, 0, 0, 0))
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0080date(self):
-        '''
-        Test date.
-        '''
-        cursor = DB.cursor()
+        'Test date'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.date.import_data(['date'],
+                [['2010-01-01']]), (1, 0, 0, 0))
 
-        self.assert_(self.date.import_data(cursor, USER, ['date'],
-            [['2010-01-01']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.date.import_data(['date'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.date.import_data(cursor, USER, ['date'], [['']],
-            CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.date.import_data(['date'],
+                [['2010-01-01'], ['2010-02-01']]), (2, 0, 0, 0))
 
-        self.assert_(self.date.import_data(cursor, USER, ['date'], [
-            ['2010-01-01'], ['2010-02-01']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.date.import_data(['date'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.date.import_data(cursor, USER, ['date'], [['foo']],
-            CONTEXT)[0] == -1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0090datetime(self):
-        '''
-        Test datetime.
-        '''
-        cursor = DB.cursor()
+        'Test datetime'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.datetime.import_data(['datetime'],
+                [['2010-01-01 12:00:00']]), (1, 0, 0, 0))
 
-        self.assert_(self.datetime.import_data(cursor, USER, ['datetime'],
-            [['2010-01-01 12:00:00']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.datetime.import_data(['datetime'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.datetime.import_data(cursor, USER, ['datetime'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.datetime.import_data(['datetime'],
+                [['2010-01-01 12:00:00'], ['2010-01-01 13:30:00']]),
+                (2, 0, 0, 0))
 
-        self.assert_(self.datetime.import_data(cursor, USER, ['datetime'],
-            [['2010-01-01 12:00:00'], ['2010-01-01 13:30:00']], CONTEXT) == (2,
-                0, 0, 0))
+            self.assertEqual(self.datetime.import_data(['datetime'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.datetime.import_data(cursor, USER, ['datetime'],
-            [['foo']], CONTEXT)[0] == -1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0100selection(self):
-        '''
-        Test selection.
-        '''
-        cursor = DB.cursor()
+        'Test selection'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.selection.import_data(['selection'],
+                [['select1']]), (1, 0, 0, 0))
 
-        self.assert_(self.selection.import_data(cursor, USER, ['selection'],
-            [['select1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.selection.import_data(['selection'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.selection.import_data(cursor, USER, ['selection'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.selection.import_data(['selection'],
+                [['select1'], ['select2']]), (2, 0, 0, 0))
 
-        self.assert_(self.selection.import_data(cursor, USER, ['selection'],
-            [['select1'], ['select2']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.selection.import_data(['selection'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.selection.import_data(cursor, USER, ['selection'],
-            [['foo']], CONTEXT)[0] == -1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0110many2one(self):
-        '''
-        Test many2one.
-        '''
-        cursor = DB.cursor()
+        'Test many2one'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.many2one.import_data(['many2one'],
+                [['Test']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one'],
-            [['Test']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2one.import_data(['many2one:id'],
+                [['tests.import_data_many2one_target_test']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one:id'],
-            [['test.import_data_many2one_target_test']], CONTEXT) == (1, 0, 0,
-                0))
+            self.assertEqual(self.many2one.import_data(['many2one'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2one.import_data(['many2one'],
+                [['Test'], ['Test']]), (2, 0, 0, 0))
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one'],
-            [['Test'], ['Test']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.many2one.import_data(['many2one'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one'],
-            [['foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.many2one.import_data(['many2one'],
+                [['Duplicate']])[0], -1)
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one'],
-            [['Duplicate']], CONTEXT)[0] == -1)
+            self.assertEqual(self.many2one.import_data(['many2one:id'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one:id'],
-            [['foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.many2one.import_data(['many2one:id'],
+                [['tests.foo']])[0], -1)
 
-        self.assert_(self.many2one.import_data(cursor, USER, ['many2one:id'],
-            [['test.foo']], CONTEXT)[0] == -1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0120many2many(self):
-        '''
-        Test many2many.
-        '''
-        cursor = DB.cursor()
+        'Test many2many'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test 1']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test 1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many:id'],
+                [['tests.import_data_many2many_target_test1']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many:id'],
-            [['test.import_data_many2many_target_test1']], CONTEXT) == (1, 0,
-                0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test 1,Test 2']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test 1,Test 2']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many:id'],
+                [['tests.import_data_many2many_target_test1,'
+                    'tests.import_data_many2many_target_test2']]),
+                (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many:id'],
-            [['test.import_data_many2many_target_test1,' \
-                    'test.import_data_many2many_target_test2']], CONTEXT) ==
-            (1, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test\, comma']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test\, comma']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test\, comma,Test 1']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test\, comma,Test 1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['']]), (1, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test 1'], ['Test 2']]), (2, 0, 0, 0))
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test 1'], ['Test 2']], CONTEXT) == (2, 0, 0, 0))
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['foo']])[0], -1)
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test 1,foo']])[0], -1)
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test 1,foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Duplicate']])[0], -1)
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Duplicate']], CONTEXT)[0] == -1)
+            self.assertEqual(self.many2many.import_data(['many2many'],
+                [['Test 1,Duplicate']])[0], -1)
 
-        self.assert_(self.many2many.import_data(cursor, USER, ['many2many'],
-            [['Test 1,Duplicate']], CONTEXT)[0] == -1)
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0130one2many(self):
-        '''
-        Test one2many.
-        '''
-        cursor = DB.cursor()
+        'Test one2many'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.one2many.import_data(
+                    ['name', 'one2many/name'], [['Test', 'Test 1']]),
+                (1, 0, 0, 0))
 
-        self.assert_(self.one2many.import_data(cursor, USER, ['name',
-            'one2many/name'], [['Test', 'Test 1']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.one2many.import_data(
+                    ['name', 'one2many/name'], [
+                        ['Test', 'Test 1'], ['', 'Test 2']]),
+                (1, 0, 0, 0))
 
-        self.assert_(self.one2many.import_data(cursor, USER, ['name',
-            'one2many/name'], [['Test', 'Test 1'], ['', 'Test 2']], CONTEXT) ==
-            (1, 0, 0, 0))
+            self.assertEqual(self.one2many.import_data(
+                    ['name', 'one2many/name'],
+                    [
+                        ['Test 1', 'Test 1'],
+                        ['', 'Test 2'],
+                        ['Test 2', 'Test 1']]),
+                (2, 0, 0, 0))
 
-        self.assert_(self.one2many.import_data(cursor, USER, ['name',
-            'one2many/name'], [['Test 1', 'Test 1'], ['', 'Test 2'], ['Test 2',
-                'Test 1']], CONTEXT) == (2, 0, 0, 0))
-
-        cursor.rollback()
-        cursor.close()
+            transaction.cursor.rollback()
 
     def test0140reference(self):
-        '''
-        Test reference.
-        '''
-        cursor = DB.cursor()
+        'Test reference'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            self.assertEqual(self.reference.import_data(['reference'],
+                [['test.import_data.reference.selection,Test']]),
+                (1, 0, 0, 0))
+            reference, = self.reference.search([])
+            self.assertEqual(reference.reference.__name__,
+                'test.import_data.reference.selection')
+            transaction.cursor.rollback()
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference'],
-            [['test.import_data.reference.selection,Test']], CONTEXT) == (1, 0,
-                0, 0))
+            self.assertEqual(self.reference.import_data(['reference:id'],
+                [['test.import_data.reference.selection,'
+                    'tests.import_data_reference_selection_test']]),
+                (1, 0, 0, 0))
+            reference, = self.reference.search([])
+            self.assertEqual(reference.reference.__name__,
+                'test.import_data.reference.selection')
+            transaction.cursor.rollback()
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference:id'],
-            [['test.import_data.reference.selection,'\
-                    'test.import_data_reference_selection_test']], CONTEXT) ==
-            (1, 0, 0, 0))
+            self.assertEqual(self.reference.import_data(['reference'],
+                [['']]), (1, 0, 0, 0))
+            reference, = self.reference.search([])
+            self.assertEqual(reference.reference, None)
+            transaction.cursor.rollback()
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference'],
-            [['']], CONTEXT) == (1, 0, 0, 0))
+            self.assertEqual(self.reference.import_data(['reference'],
+                [['test.import_data.reference.selection,Test'],
+                    ['test.import_data.reference.selection,Test']]),
+                (2, 0, 0, 0))
+            for reference in self.reference.search([]):
+                self.assertEqual(reference.reference.__name__,
+                    'test.import_data.reference.selection')
+            transaction.cursor.rollback()
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference'],
-            [['test.import_data.reference.selection,Test'],
-                ['test.import_data.reference.selection,Test']], CONTEXT) == (2,
-                    0, 0, 0))
+            self.assertEqual(self.reference.import_data(['reference'],
+                [['test.import_data.reference.selection,foo']])[0], -1)
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference'],
-            [['test.import_data.reference.selection,foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.reference.import_data(['reference'],
+                [['test.import_data.reference.selection,Duplicate']])[0], -1)
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference'],
-            [['test.import_data.reference.selection,Duplicate']], CONTEXT)[0]
-            == -1)
+            self.assertEqual(self.reference.import_data(['reference:id'],
+                [['test.import_data.reference.selection,foo']])[0], -1)
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference:id'],
-            [['test.import_data.reference.selection,foo']], CONTEXT)[0] == -1)
+            self.assertEqual(self.reference.import_data(['reference:id'],
+                [['test.import_data.reference.selection,test.foo']])[0], -1)
 
-        self.assert_(self.reference.import_data(cursor, USER, ['reference:id'],
-            [['test.import_data.reference.selection,test.foo']], CONTEXT)[0] ==
-            -1)
+            transaction.cursor.rollback()
 
-        cursor.rollback()
-        cursor.close()
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(ImportDataTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)
-

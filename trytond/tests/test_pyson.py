@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
@@ -9,14 +8,10 @@ from trytond import pyson
 
 
 class PYSONTestCase(unittest.TestCase):
-    '''
-    Test PySON.
-    '''
+    'Test PySON'
 
     def test0010Eval(self):
-        '''
-        Test pyson.Eval
-        '''
+        'Test pyson.Eval'
         self.assert_(pyson.Eval('test').pyson() == {
             '__class__': 'Eval',
             'v': 'test',
@@ -36,9 +31,7 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.PYSONDecoder().decode(eval) == 0)
 
     def test0020Not(self):
-        '''
-        Test pyson.Not
-        '''
+        'Test pyson.Not'
         self.assert_(pyson.Not(True).pyson() == {
             '__class__': 'Not',
             'v': True,
@@ -49,15 +42,13 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.Not(True).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.Not(True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Not(False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
     def test0030Bool(self):
-        '''
-        Test pyson.Bool
-        '''
+        'Test pyson.Bool'
         self.assert_(pyson.Bool('test').pyson() == {
             '__class__': 'Bool',
             'v': 'test',
@@ -66,42 +57,40 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.Bool('test').types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool(True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool(False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool('test'))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool(''))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool(1))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool(0))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool(['test']))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool([]))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool({'foo': 'bar'}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Bool({}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
     def test0040And(self):
-        '''
-        Test pyson.And
-        '''
+        'Test pyson.And'
         self.assert_(pyson.And(True, False).pyson() == {
             '__class__': 'And',
-            's': (True, False),
+            's': [True, False],
             })
 
         self.assertRaises(AssertionError, pyson.And, 'test', False)
@@ -113,39 +102,37 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.And(True, False).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(True, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(True, True, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(True, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(False, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(False, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(False, False, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(True, False, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(False, True, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.And(False, False, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
     def test0050Or(self):
-        '''
-        Test pyson.Or
-        '''
+        'Test pyson.Or'
         self.assert_(pyson.Or(True, False).pyson() == {
             '__class__': 'Or',
-            's': (True, False),
+            's': [True, False],
             })
 
         self.assertRaises(AssertionError, pyson.Or, 'test', False)
@@ -157,36 +144,34 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.Or(True, False).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(True, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(True, True, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(True, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(False, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(False, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(False, False, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(True, False, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(False, True, False))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Or(False, False, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
     def test0060Equal(self):
-        '''
-        Test pyson.Equal
-        '''
+        'Test pyson.Equal'
         self.assert_(pyson.Equal('test', 'test').pyson() == {
             '__class__': 'Equal',
             's1': 'test',
@@ -198,15 +183,13 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.Equal('test', 'test').types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.Equal('test', 'test'))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Equal('foo', 'bar'))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
     def test0070Greater(self):
-        '''
-        Test pyson.Greater
-        '''
+        'Test pyson.Greater'
         self.assert_(pyson.Greater(1, 0).pyson() == {
             '__class__': 'Greater',
             's1': 1,
@@ -221,27 +204,25 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.Greater(1, 0).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.Greater(1, 0))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Greater(0, 1))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Greater(1, 0, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Greater(0, 1, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Greater(1, 1))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Greater(1, 1, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
     def test0080Less(self):
-        '''
-        Test pyson.Less
-        '''
+        'Test pyson.Less'
         self.assert_(pyson.Less(0, 1).pyson() == {
             '__class__': 'Less',
             's1': 0,
@@ -256,27 +237,25 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.Less(0, 1).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.Less(0, 1))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Less(1, 0))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Less(0, 1, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Less(1, 0, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Less(1, 1))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.Less(1, 1, True))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
     def test0090If(self):
-        '''
-        Test pyson.If
-        '''
+        'Test pyson.If'
         self.assert_(pyson.If(True, 'foo', 'bar').pyson() == {
             '__class__': 'If',
             'c': True,
@@ -287,7 +266,8 @@ class PYSONTestCase(unittest.TestCase):
         self.assertRaises(AssertionError, pyson.If, 'test', 'foo', 'bar')
         self.assertRaises(AssertionError, pyson.If, True, 'foo', False)
 
-        self.assert_(pyson.If(True, 'foo', 'bar').types() == set([type('foo')]))
+        self.assertEqual(pyson.If(True, 'foo', 'bar').types(),
+            set([type('foo')]))
         self.assert_(pyson.If(True, False, True).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.If(True, 'foo', 'bar'))
@@ -297,9 +277,7 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.PYSONDecoder().decode(eval) == 'bar')
 
     def test0100Get(self):
-        '''
-        Test pyson.Get
-        '''
+        'Test pyson.Get'
         self.assert_(pyson.Get({'foo': 'bar'}, 'foo', 'default').pyson() == {
             '__class__': 'Get',
             'v': {'foo': 'bar'},
@@ -326,9 +304,7 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.PYSONDecoder().decode(eval) == 'default')
 
     def test0110In(self):
-        '''
-        Test pyson.In
-        '''
+        'Test pyson.In'
         self.assert_(pyson.In('foo', {'foo': 'bar'}).pyson() == {
             '__class__': 'In',
             'k': 'foo',
@@ -341,39 +317,37 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.In('foo', {}).types() == set([bool]))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('foo', {'foo': 'bar'}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('1', {1: 'bar'}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('test', {'foo': 'bar'}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('1', {2: 'bar'}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('test', {}))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('foo', ['foo']))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In(1, [1]))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == True)
+        self.assertTrue(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('test', ['foo']))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In(1, [2]))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
         eval = pyson.PYSONEncoder().encode(pyson.In('test', []))
-        self.assert_(pyson.PYSONDecoder().decode(eval) == False)
+        self.assertFalse(pyson.PYSONDecoder().decode(eval))
 
     def test0120Date(self):
-        '''
-        Test pyson.Date
-        '''
+        'Test pyson.Date'
         self.assert_(pyson.Date(2010, 1, 12, -1, 12, -7).pyson() == {
             '__class__': 'Date',
             'y': 2010,
@@ -425,27 +399,25 @@ class PYSONTestCase(unittest.TestCase):
                 == datetime.date(2010, 2, 22))
 
     def test0130DateTime(self):
-        '''
-        Test pyson.DateTime
-        '''
+        'Test pyson.DateTime'
         self.assert_(pyson.DateTime(2010, 1, 12, 10, 30, 20, 0,
             -1, 12, -7, 2, 15, 30, 1).pyson() == {
-            '__class__': 'DateTime',
-            'y': 2010,
-            'M': 1,
-            'd': 12,
-            'h': 10,
-            'm': 30,
-            's': 20,
-            'ms': 0,
-            'dy': -1,
-            'dM': 12,
-            'dd': -7,
-            'dh': 2,
-            'dm': 15,
-            'ds': 30,
-            'dms': 1,
-            })
+                '__class__': 'DateTime',
+                'y': 2010,
+                'M': 1,
+                'd': 12,
+                'h': 10,
+                'm': 30,
+                's': 20,
+                'ms': 0,
+                'dy': -1,
+                'dM': 12,
+                'dd': -7,
+                'dh': 2,
+                'dm': 15,
+                'ds': 30,
+                'dms': 1,
+                })
 
         self.assertRaises(AssertionError, pyson.DateTime, 'test', 1, 12, 10,
                 30, 20, 0, -1, 12, -7, 2, 15, 30, 1)
@@ -524,22 +496,36 @@ class PYSONTestCase(unittest.TestCase):
         self.assert_(pyson.PYSONDecoder().decode(eval)
                 == datetime.datetime(2010, 2, 22, 10, 30, 20, 200))
 
-    def test0900Composite(self):
-        '''
-        Test Composite
-        '''
+    def test0140Len(self):
+        'Test pyson.Len'
+        self.assert_(pyson.Len([1, 2, 3]).pyson() == {
+                '__class__': 'Len',
+                'v': [1, 2, 3],
+                })
 
+        self.assertRaises(AssertionError, pyson.Len, object())
+
+        self.assert_(pyson.Len([1, 2, 3]).types() == set([int, long]))
+
+        eval = pyson.PYSONEncoder().encode(pyson.Len([1, 2, 3]))
+        self.assertEqual(pyson.PYSONDecoder().decode(eval), 3)
+
+        eval = pyson.PYSONEncoder().encode(pyson.Len({1: 2, 3: 4}))
+        self.assertEqual(pyson.PYSONDecoder().decode(eval), 2)
+
+        eval = pyson.PYSONEncoder().encode(pyson.Len('foo bar'))
+        self.assertEqual(pyson.PYSONDecoder().decode(eval), 7)
+
+    def test0900Composite(self):
+        'Test Composite'
         eval = pyson.PYSONEncoder().encode(['id', pyson.If(pyson.Not(
             pyson.In('company', pyson.Eval('context', {}))), '=', '!='),
-            pyson.Get(pyson.Eval('context', {}), 'company', 0)])
+            pyson.Get(pyson.Eval('context', {}), 'company', -1)])
         self.assert_(pyson.PYSONDecoder({'context': {'company': 1}}
             ).decode(eval) == ['id', '!=', 1])
         self.assert_(pyson.PYSONDecoder({'context': {}}
-            ).decode(eval) == ['id', '=', 0])
+            ).decode(eval) == ['id', '=', -1])
+
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(PYSONTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)
