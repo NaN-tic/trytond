@@ -125,6 +125,22 @@ List of attributes shared by many form elements:
       pre-validate the records using
       :meth:`trytond.model.Model.pre_validate`.
 
+    .. _common-attributes-completion:
+
+    * ``completion``: A boolean only for fields
+      :class:`trytond.model.fields.Many2One`,
+      :class:`trytond.model.fields.Many2Many` and
+      :class:`trytond.model.fields.One2Many` to specifiy if the client must
+      auto-complete the field. The default value is True.
+
+    .. _common-attributes-factor:
+
+    * ``factor``: A factor to apply on fields
+      :class:`trytond.model.fields.Integer`,
+      :class:`trytond.model.fields.Float` and
+      :class:`trytond.model.fields.Numeric` to display on the widget. The
+      default value is 1.
+
 
 form
 ^^^^
@@ -151,7 +167,8 @@ Display static string.
     * ``string``: The string that will be displayed in the label.
 
     * ``name``: The name of the field whose description will be used for
-      string.
+      string. Except if ``string`` is set, it will use this value and the value
+      of the field if ``string`` is empty.
 
     * ``id``: see common-attributes-id_.
 
@@ -182,6 +199,8 @@ Display a field of the object with the value of the current record.
 
     * ``name``: The name of the field.
 
+    * ``string``: The string that will be displayed for the widget.
+
     * ``widget``: The widget that must be used instead of the default one.
 
     * ``help``: The string that will be displayed when the cursor stays over the
@@ -208,8 +227,8 @@ Display a field of the object with the value of the current record.
     * ``invisible``: The field will not be displayed, but it will fill cells in
       the table.
 
-    * ``domain``: Only for One2Many, Many2One, Many2Many fields, it defines the
-      domain that must be used when searching for related records.
+    * ``filename_visible``: Only for Binary fields, boolean that enables the
+      display of the filename.
 
     * ``yexpand``: see in common-attributes-yexpand_.
 
@@ -224,6 +243,10 @@ Display a field of the object with the value of the current record.
     * ``help``: see in common-attributes-help_.
 
     * ``pre_validate``: see in common-attributes-pre_validate_.
+
+    * ``completion``: see in common-attributes-completion_.
+
+    * ``factor``: see in common-attributes-factor_.
 
 image
 ^^^^^
@@ -273,6 +296,9 @@ newline
 
 Force to use a new row.
 
+
+.. _form-button:
+
 button
 ^^^^^^
 
@@ -280,14 +306,24 @@ Display a button.
 
     * ``string``: The string that will be displayed inside the button.
 
-    * ``name``: The name of the action:
+    * ``name``: The name of the function that will be called. The function must
+      have this syntax:
 
-        * ``object``: the name of the function that will called.  The function
-          must have this syntax:
+        ``button(cls, records)``
 
-          ``button(self, ids)``
+      The function may return an `ir.action` id or one of those client side
+      action keywords:
 
-        * ``action``: the id of the ir.action that will be called.
+.. _topics-views-client-actions:
+
+        * ``new``: to create a new record
+        * ``delete``: to delete the selected records
+        * ``remove``: to remove the record if it has a parent
+        * ``copy``: to copy the selected records
+        * ``next``: to go to the next record
+        * ``previous``: to go to the previous record
+        * ``close``: to close the current tab
+        * ``switch <view type>``: to switch the view to the defined type
 
     * ``icon``
 
@@ -338,6 +374,8 @@ Create a sub-table in a cell.
     * ``rowspan``: The number of rows the group spans in the table.
 
     * ``col``: The number of columns for the group contains.
+
+    * ``homogeneous``: If True all the tables cells are the same size.
 
     * ``id``: see in common-attributes-id_.
 
@@ -479,6 +517,28 @@ field
 
     * ``pre_validate``: see in common-attributes-pre_validate_.
 
+    * ``completion``: see in common-attributes-completion_.
+
+    * ``factor``: see in common-attributes-factor_.
+
+prefix or suffix
+^^^^^^^^^^^^^^^^
+
+A ``field`` could contain one or many ``prefix`` or ``suffix`` that will be
+diplayed in the same column.
+
+    * ``string``: The text that will be displayed.
+
+    * ``name``: The name of the field whose value will be displayed.
+
+    * ``icon``: The name of the field that contains the name of the icon to
+      display or the name of the icon.
+
+button
+^^^^^^
+
+Same as in form-button_.
+
 Example
 -------
 
@@ -488,12 +548,31 @@ Example
 
   <tree string="Taxes" sequence="sequence">
       <field name="name"/>
+      <field name="percentage">
+          <suffix string="%"/>
+      </field>
       <field name="group"/>
       <field name="type"/>
       <field name="active"/>
       <field name="sequence" tree_invisible="1"/>
   </tree>
 
+button
+^^^^^^
+
+Display a button.
+
+    * ``string``: The string that will be displayed inside the button.
+
+    * ``name``: The name of the function that will be called. The function must
+      have this syntax:
+
+        ``button(cls, records)``
+
+    * ``confirm``: A text that will be displayed in a confirmation popup when
+      the button is clicked.
+
+    * ``help``: see in common-attributes-help_
 
 Graph view
 ==========
@@ -662,3 +741,45 @@ action
     * ``name``: The id of the action window.
 
     * ``colspan``: see in common-attributes-colspan_.
+
+Calendar view
+=============
+
+The RNG that describes the xml for a calendar view is stored in
+trytond/ir/ui/calendar.rng. There is also a RNC in trytond/ir/ui/calendar.rnc.
+
+Calendar view is use to display records as events on a calendar based on a
+`dtstart` and optionally a `dtend`.
+
+XML description
+---------------
+
+calendar
+^^^^^^^^
+
+Each calendar view must start with this tag.
+
+    * ``dtstart``: The name of the field that contains the start date.
+
+    * ``dtend``: The name of the field that contains the end date.
+
+    * ``string``: The text that will be used as default title for the tab or
+      the window.
+
+field
+^^^^^
+
+    * ``name``: The name of the field.
+
+Example
+-------
+
+.. highlight:: xml
+
+::
+
+  <calendar string="Productions" dtstart="planned_date">
+      <field name="code"/>
+      <field name="product"/>
+      <field name="reference"/>
+  </calendar>

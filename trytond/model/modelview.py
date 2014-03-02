@@ -2,6 +2,8 @@
 #this repository contains the full copyright notices and license terms.
 from lxml import etree
 from functools import wraps
+import copy
+
 from trytond.model import Model
 from trytond.tools import safe_eval, ClassProperty
 from trytond.pyson import PYSONEncoder, CONTEXT
@@ -63,12 +65,12 @@ def _inherit_apply(src, inherit):
                     index = parent.index(element)
                     parent.insert(index, child)
             else:
-                raise AttributeError('Unknown position ' \
-                        'in inherited view %s!' % pos)
+                raise AttributeError(
+                    'Unknown position in inherited view %s!' % pos)
         else:
             raise AttributeError(
-                    'Couldn\'t find tag (%s: %s) in parent view!' % \
-                            (element2.tag, element2.get('expr')))
+                'Couldn\'t find tag (%s: %s) in parent view!'
+                % (element2.tag, element2.get('expr')))
     return etree.tostring(tree_src, encoding='utf-8')
 
 
@@ -203,7 +205,7 @@ class ModelView(Model):
             if view_type == 'form':
                 res = cls.fields_get()
                 xml = '''<?xml version="1.0"?>''' \
-                '''<form string="%s" col="4">''' % (cls.__doc__,)
+                    '''<form string="%s" col="4">''' % (cls.__doc__,)
                 for i in res:
                     if i in ('create_uid', 'create_date',
                             'write_uid', 'write_date', 'id', 'rec_name'):
@@ -221,13 +223,13 @@ class ModelView(Model):
                 if cls._rec_name in cls._fields:
                     field = cls._rec_name
                 xml = '''<?xml version="1.0"?>''' \
-                '''<tree string="%s"><field name="%s"/></tree>''' \
-                % (cls.__doc__, field)
+                    '''<tree string="%s"><field name="%s"/></tree>''' \
+                    % (cls.__doc__, field)
             else:
                 xml = ''
             result['type'] = view_type
             result['arch'] = xml
-            result['field_childs'] = False
+            result['field_childs'] = None
             result['view_id'] = 0
 
         # Update arch and compute fields from arch
@@ -299,11 +301,13 @@ class ModelView(Model):
                         raise_exception=False):
                     return False
             if field._type in ('many2many', 'one2one'):
-                if not ModelAccess.check(field.target, mode='read',
-                        raise_exception=False):
+                if (field.target
+                        and not ModelAccess.check(field.target, mode='read',
+                            raise_exception=False)):
                     return False
-                elif not ModelAccess.check(field.relation_name,
-                        mode='read', raise_exception=False):
+                elif (field.relation_name
+                        and not ModelAccess.check(field.relation_name,
+                            mode='read', raise_exception=False)):
                     return False
             if field._type == 'reference':
                 selection = field.selection
@@ -324,24 +328,6 @@ class ModelView(Model):
             for field_to_remove in fields_to_remove:
                 if field_to_remove in field.depends:
                     fields_to_remove.append(name)
-
-        # Find field inherited without read access
-        for inherit_name in cls._inherits:
-            Inherit = pool.get(inherit_name)
-            fread_accesses = FieldAccess.check(Inherit.__name__,
-                    Inherit._fields.keys(), 'read', access=True)
-            fields_to_remove += list(x for x, y in fread_accesses.iteritems()
-                    if not y and x not in cls._fields.keys())
-
-            # Find relation field without read access
-            for name, field in Inherit._fields.iteritems():
-                if not check_relation(Inherit, field):
-                    fields_to_remove.append(name)
-
-            for name, field in Inherit._fields.iteritems():
-                for field_to_remove in fields_to_remove:
-                    if field_to_remove in field.depends:
-                        fields_to_remove.append(name)
 
         # Remove field without read access
         for field in fields_to_remove:
@@ -370,26 +356,19 @@ class ModelView(Model):
 
         if field_children:
             fields_def.setdefault(field_children, {'name': field_children})
-            model, field = None, None
             if field_children in cls._fields:
-                model = cls
                 field = cls._fields[field_children]
-            elif field_children in cls._inherit_fields:
-                model_name, model, field = cls._inherit_fields[field_children]
-            if model and field and field.model_name == model.__name__:
                 fields_def.setdefault(field.field, {'name': field.field})
 
         for field_name in fields_def.keys():
             if field_name in cls._fields:
                 field = cls._fields[field_name]
-            elif field_name in cls._inherit_fields:
-                field = cls._inherit_fields[field_name][2]
             else:
                 continue
             for depend in field.depends:
                 fields_def.setdefault(depend, {'name': depend})
 
-        if ('active' in cls._fields) or ('active' in cls._inherit_fields):
+        if 'active' in cls._fields:
             fields_def.setdefault('active', {'name': 'active'})
 
         arch = etree.tostring(tree, encoding='utf-8', pretty_print=False)
@@ -400,7 +379,8 @@ class ModelView(Model):
         return arch, fields2
 
     @classmethod
-    def __view_look_dom(cls, element, type, fields_width=None):
+    def __view_look_dom(cls, element, type, fields_width=None,
+            fields_attrs=None):
         pool = Pool()
         Translation = pool.get('ir.translation')
         ModelData = pool.get('ir.model.data')
@@ -409,19 +389,19 @@ class ModelView(Model):
 
         if fields_width is None:
             fields_width = {}
-        fields_attrs = {}
+        if not fields_attrs:
+            fields_attrs = {}
+        else:
+            fields_attrs = copy.deepcopy(fields_attrs)
         childs = True
 
-        if element.tag in ('field', 'label', 'separator', 'group'):
+        if element.tag in ('field', 'label', 'separator', 'group', 'suffix',
+                'prefix'):
             for attr in ('name', 'icon'):
                 if element.get(attr):
-                    attrs = {}
+                    fields_attrs.setdefault(element.get(attr), {})
                     try:
-                        if element.get(attr) in cls._fields:
-                            field = cls._fields[element.get(attr)]
-                        else:
-                            field = cls._inherit_fields[element.get(
-                                attr)][2]
+                        field = cls._fields[element.get(attr)]
                         if hasattr(field, 'model_name'):
                             relation = field.model_name
                         else:
@@ -451,7 +431,7 @@ class ModelView(Model):
                                 for view_id in view_ids:
                                     view = Relation.fields_view_get(
                                         view_id=view_id)
-                                    views[view['type']] = view
+                                    views[str(view_id)] = view
                                     break
                             else:
                                 for view_type in mode:
@@ -462,10 +442,8 @@ class ModelView(Model):
                         element.attrib['mode'] = ','.join(mode)
                         element.attrib['view_ids'] = ','.join(
                             map(str, view_ids))
-                        attrs = {
-                            'views': views,
-                            }
-                    fields_attrs[element.get(attr)] = attrs
+                        fields_attrs[element.get(attr)].setdefault('views', {}
+                            ).update(views)
             if element.get('name') in fields_width:
                 element.set('width', str(fields_width[element.get('name')]))
 
@@ -506,10 +484,15 @@ class ModelView(Model):
         if element.tag == 'tree' and element.get('sequence'):
             fields_attrs.setdefault(element.get('sequence'), {})
 
+        if element.tag == 'calendar':
+            for attr in ('dtstart', 'dtend'):
+                if element.get(attr):
+                    fields_attrs.setdefault(element.get(attr), {})
+
         if childs:
             for field in element:
-                fields_attrs.update(cls.__view_look_dom(field, type,
-                    fields_width=fields_width))
+                fields_attrs = cls.__view_look_dom(field, type,
+                    fields_width=fields_width, fields_attrs=fields_attrs)
         return fields_attrs
 
     @staticmethod

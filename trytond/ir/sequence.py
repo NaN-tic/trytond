@@ -2,13 +2,16 @@
 #this repository contains the full copyright notices and license terms.
 from string import Template
 import time
+from itertools import izip
+from sql import Flavor
+
 from ..model import ModelView, ModelSQL, fields
 from ..tools import datetime_strftime
 from ..pyson import Eval, And
 from ..transaction import Transaction
 from ..pool import Pool
 from ..config import CONFIG
-from ..backend import TableHandler
+from .. import backend
 
 __all__ = [
     'SequenceType', 'Sequence', 'SequenceStrict',
@@ -82,22 +85,23 @@ class Sequence(ModelSQL, ModelView):
     @classmethod
     def __setup__(cls):
         super(Sequence, cls).__setup__()
-        cls._constraints += [
-            ('check_prefix_suffix', 'invalid_prefix_suffix'),
-            ('check_last_timestamp', 'future_last_timestamp'),
-        ]
         cls._sql_constraints += [
             ('check_timestamp_rounding', 'CHECK(timestamp_rounding > 0)',
                 'Timestamp rounding should be greater than 0'),
             ]
         cls._error_messages.update({
-            'missing': 'Missing sequence!',
-            'invalid_prefix_suffix': 'Invalid prefix/suffix!',
-            'future_last_timestamp': 'Last Timestamp could not be in future!',
-            })
+                'missing': 'Missing sequence.',
+                'invalid_prefix': ('Invalid prefix "%(prefix)s" on sequence '
+                    '"%(sequence)s".'),
+                'invalid_suffix': ('Invalid suffix "%(suffix)s" on sequence '
+                    '"%(sequence)s".'),
+                'future_last_timestamp': ('Last Timestamp cannot be in the '
+                    'future on sequence "%s".'),
+                })
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         table = TableHandler(cursor, cls, module_name)
 
@@ -171,21 +175,22 @@ class Sequence(ModelSQL, ModelView):
                 })
 
     @classmethod
-    def create(cls, values):
-        sequence_id = super(Sequence, cls).create(values)
-        if sql_sequence and not cls._strict:
-            sequence = cls(sequence_id)
-            sequence.update_sql_sequence(values.get('number_next',
-                    cls.default_number_next()))
-        return sequence_id
+    def create(cls, vlist):
+        sequences = super(Sequence, cls).create(vlist)
+        for sequence, values in izip(sequences, vlist):
+            if sql_sequence and not cls._strict:
+                sequence.update_sql_sequence(values.get('number_next',
+                        cls.default_number_next()))
+        return sequences
 
     @classmethod
-    def write(cls, sequences, values):
-        result = super(Sequence, cls).write(sequences, values)
+    def write(cls, sequences, values, *args):
+        super(Sequence, cls).write(sequences, values, *args)
         if sql_sequence and not cls._strict:
-            for sequence in sequences:
-                sequence.update_sql_sequence(values.get('number_next'))
-        return result
+            actions = iter((sequences, values) + args)
+            for sequences, values in zip(actions, actions):
+                for sequence in sequences:
+                    sequence.update_sql_sequence(values.get('number_next'))
 
     @classmethod
     def delete(cls, sequences):
@@ -202,16 +207,26 @@ class Sequence(ModelSQL, ModelView):
         return [(x.code, x.name) for x in sequence_types]
 
     @classmethod
+    def validate(cls, sequences):
+        super(Sequence, cls).validate(sequences)
+        cls.check_prefix_suffix(sequences)
+        cls.check_last_timestamp(sequences)
+
+    @classmethod
     def check_prefix_suffix(cls, sequences):
         "Check prefix and suffix"
 
         for sequence in sequences:
-            try:
-                cls._process(sequence.prefix)
-                cls._process(sequence.suffix)
-            except Exception:
-                return False
-        return True
+            for fix, error_message in ((sequence.prefix, 'invalid_prefix'),
+                    (sequence.suffix, 'invalid_suffix')):
+                try:
+                    cls._process(sequence.prefix)
+                    cls._process(sequence.suffix)
+                except Exception:
+                    cls.raise_user_error(error_message, {
+                            'prefix': fix,
+                            'sequence': sequence.rec_name,
+                            })
 
     @classmethod
     def check_last_timestamp(cls, sequences):
@@ -220,8 +235,8 @@ class Sequence(ModelSQL, ModelView):
         for sequence in sequences:
             next_timestamp = cls._timestamp(sequence)
             if sequence.last_timestamp > next_timestamp:
-                return False
-        return True
+                cls.raise_user_error('future_last_timestamp', (
+                        sequence.rec_name,))
 
     @property
     def _sql_sequence_name(self):
@@ -231,17 +246,20 @@ class Sequence(ModelSQL, ModelView):
     def create_sql_sequence(self, number_next=None):
         'Create the SQL sequence'
         cursor = Transaction().cursor
+        param = Flavor.get().param
         if self.type != 'incremental':
             return
         if number_next is None:
             number_next = self.number_next
         cursor.execute('CREATE SEQUENCE "' + self._sql_sequence_name
-            + '" INCREMENT BY %s START WITH %s',
+            + '" INCREMENT BY ' + param + ' START WITH ' + param,
             (self.number_increment, number_next))
 
     def update_sql_sequence(self, number_next=None):
         'Update the SQL sequence'
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
+        param = Flavor.get().param
         exist = TableHandler.sequence_exist(cursor, self._sql_sequence_name)
         if self.type != 'incremental':
             if exist:
@@ -253,7 +271,7 @@ class Sequence(ModelSQL, ModelView):
         if number_next is None:
             number_next = self.number_next
         cursor.execute('ALTER SEQUENCE "' + self._sql_sequence_name
-            + '" INCREMENT BY %s RESTART WITH %s',
+            + '" INCREMENT BY ' + param + ' RESTART WITH ' + param,
             (self.number_increment, number_next))
 
     def delete_sql_sequence(self):

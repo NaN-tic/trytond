@@ -8,7 +8,6 @@ from ..cache import Cache
 from ..tools import safe_eval, datetime_strftime
 from ..transaction import Transaction
 from ..pool import Pool
-from ..config import CONFIG
 from .time_locale import TIME_LOCALE
 
 warnings.filterwarnings('ignore', "", ImportWarning)
@@ -25,13 +24,13 @@ class Lang(ModelSQL, ModelView):
     __name__ = "ir.lang"
     name = fields.Char('Name', required=True, translate=True)
     code = fields.Char('Code', required=True,
-            help="RFC 4646 tag: http://tools.ietf.org/html/rfc4646")
+        help="RFC 4646 tag: http://tools.ietf.org/html/rfc4646")
     translatable = fields.Boolean('Translatable')
     active = fields.Boolean('Active')
     direction = fields.Selection([
-       ('ltr', 'Left-to-right'),
-       ('rtl', 'Right-to-left'),
-       ], 'Direction', required=True)
+            ('ltr', 'Left-to-right'),
+            ('rtl', 'Right-to-left'),
+            ], 'Direction', required=True)
 
     #date
     date = fields.Char('Date', required=True)
@@ -46,19 +45,20 @@ class Lang(ModelSQL, ModelView):
     @classmethod
     def __setup__(cls):
         super(Lang, cls).__setup__()
-        cls._constraints += [
-            ('check_grouping', 'invalid_grouping'),
-            ('check_date', 'invalid_date'),
-        ]
         cls._sql_constraints += [
             ('check_decimal_point_thousands_sep',
                 'CHECK(decimal_point != thousands_sep)',
                 'decimal_point and thousands_sep must be different!'),
-        ]
+            ]
         cls._error_messages.update({
-            'invalid_grouping': 'Invalid Grouping!',
-            'invalid_date': 'The date format is not valid!',
-        })
+                'invalid_grouping': ('Invalid grouping "%(grouping)s" on '
+                    '"%(language)s" language.'),
+                'invalid_date': ('Invalid date format "%(format)s" on '
+                    '"%(language)s" language.'),
+                'default_translatable': ('The default language must be '
+                    'translatable.'),
+                'delete_default': ('Default language can not be deleted.'),
+                })
 
     @classmethod
     def search_rec_name(cls, name, clause):
@@ -72,11 +72,12 @@ class Lang(ModelSQL, ModelView):
     def read(cls, ids, fields_names=None):
         pool = Pool()
         Translation = pool.get('ir.translation')
+        Config = pool.get('ir.configuration')
         res = super(Lang, cls).read(ids, fields_names=fields_names)
         if (Transaction().context.get('translate_name')
                 and (not fields_names or 'name' in fields_names)):
             with Transaction().set_context(
-                    language=CONFIG['language'],
+                    language=Config.get_language(),
                     translate_name=False):
                 res2 = cls.read(ids, fields_names=['id', 'code', 'name'])
             for record2 in res2:
@@ -85,8 +86,8 @@ class Lang(ModelSQL, ModelView):
                         break
                 res_trans = Translation.get_ids(cls.__name__ + ',name',
                         'model', record2['code'], [record2['id']])
-                record['name'] = res_trans.get(record2['id'], False) \
-                        or record2['name']
+                record['name'] = (res_trans.get(record2['id'], False)
+                    or record2['name'])
         return res
 
     @staticmethod
@@ -118,6 +119,13 @@ class Lang(ModelSQL, ModelView):
         return ','
 
     @classmethod
+    def validate(cls, languages):
+        super(Lang, cls).validate(languages)
+        cls.check_grouping(languages)
+        cls.check_date(languages)
+        cls.check_translatable(languages)
+
+    @classmethod
     def check_grouping(cls, langs):
         '''
         Check if grouping is list of numbers
@@ -127,10 +135,12 @@ class Lang(ModelSQL, ModelView):
                 grouping = safe_eval(lang.grouping)
                 for i in grouping:
                     if not isinstance(i, int):
-                        return False
+                        raise
             except Exception:
-                return False
-        return True
+                cls.raise_user_error('invalid_grouping', {
+                        'grouping': lang.grouping,
+                        'language': lang.rec_name,
+                        })
 
     @classmethod
     def check_date(cls, langs):
@@ -142,25 +152,40 @@ class Lang(ModelSQL, ModelView):
                 datetime_strftime(datetime.datetime.now(),
                         lang.date.encode('utf-8'))
             except Exception:
-                return False
-            if '%Y' not in lang.date:
-                return False
-            if '%b' not in lang.date \
-                    and '%B' not in lang.date \
-                    and '%m' not in lang.date \
-                    and '%-m' not in lang.date:
-                return False
-            if '%d' not in lang.date \
-                    and '%-d' not in lang.date \
-                    and '%j' not in lang.date \
-                    and '%-j' not in lang.date:
-                return False
-            if '%x' in lang.date \
-                    or '%X' in lang.date \
-                    or '%c' in lang.date \
-                    or '%Z' in lang.date:
-                return False
-        return True
+                cls.raise_user_error('invalid_date', {
+                        'format': lang.date,
+                        'language': lang.rec_name,
+                        })
+            if (('%Y' not in lang.date)
+                    or ('%b' not in lang.date
+                        and '%B' not in lang.date
+                        and '%m' not in lang.date
+                        and '%-m' not in lang.date)
+                    or ('%d' not in lang.date
+                        and '%-d' not in lang.date
+                        and '%j' not in lang.date
+                        and '%-j' not in lang.date)
+                    or ('%x' in lang.date
+                        or '%X' in lang.date
+                        or '%c' in lang.date
+                        or '%Z' in lang.date)):
+                cls.raise_user_error('invalid_date', {
+                        'format': lang.date,
+                        'language': lang.rec_name,
+                        })
+
+    @classmethod
+    def check_translatable(cls, langs):
+        pool = Pool()
+        Config = pool.get('ir.configuration')
+        # Skip check for root because when languages are created from XML file,
+        # translatable is not yet set.
+        if Transaction().user == 0:
+            return True
+        for lang in langs:
+            if (lang.code == Config.get_language()
+                    and not lang.translatable):
+                cls.raise_user_error('default_translatable')
 
     @staticmethod
     def check_xml_record(langs, values):
@@ -178,22 +203,36 @@ class Lang(ModelSQL, ModelView):
         return res
 
     @classmethod
-    def create(cls, vals):
+    def create(cls, vlist):
+        pool = Pool()
+        Translation = pool.get('ir.translation')
         # Clear cache
         cls._lang_cache.clear()
-        return super(Lang, cls).create(vals)
+        languages = super(Lang, cls).create(vlist)
+        Translation._get_language_cache.clear()
+        return languages
 
     @classmethod
-    def write(cls, langs, vals):
+    def write(cls, langs, values, *args):
+        pool = Pool()
+        Translation = pool.get('ir.translation')
         # Clear cache
         cls._lang_cache.clear()
-        super(Lang, cls).write(langs, vals)
+        super(Lang, cls).write(langs, values, *args)
+        Translation._get_language_cache.clear()
 
     @classmethod
     def delete(cls, langs):
+        pool = Pool()
+        Config = pool.get('ir.configuration')
+        Translation = pool.get('ir.translation')
+        for lang in langs:
+            if lang.code == Config.get_language():
+                cls.raise_user_error('delete_default')
         # Clear cache
         cls._lang_cache.clear()
         super(Lang, cls).delete(langs)
+        Translation._get_language_cache.clear()
 
     @staticmethod
     def _group(lang, s, monetary=None):

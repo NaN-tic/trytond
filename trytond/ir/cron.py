@@ -1,17 +1,19 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import contextlib
 import datetime
 from dateutil.relativedelta import relativedelta
 import traceback
 import sys
 import logging
-from ..config import CONFIG
+from email.mime.text import MIMEText
+from email.header import Header
+
 from ..model import ModelView, ModelSQL, fields
-from ..tools import safe_eval
+from ..tools import safe_eval, get_smtp_server
 from ..transaction import Transaction
 from ..pool import Pool
-from ..backend import TableHandler
+from .. import backend
+from ..config import CONFIG
 
 __all__ = [
     'Cron',
@@ -39,12 +41,12 @@ class Cron(ModelSQL, ModelView):
     active = fields.Boolean('Active', select=True)
     interval_number = fields.Integer('Interval Number', required=True)
     interval_type = fields.Selection([
-       ('minutes', 'Minutes'),
-       ('hours', 'Hours'),
-       ('days', 'Days'),
-       ('weeks', 'Weeks'),
-       ('months', 'Months'),
-       ], 'Interval Unit')
+            ('minutes', 'Minutes'),
+            ('hours', 'Hours'),
+            ('days', 'Days'),
+            ('weeks', 'Weeks'),
+            ('months', 'Months'),
+            ], 'Interval Unit')
     number_calls = fields.Integer('Number of Calls', select=1, required=True,
        help=('Number of times the function is called, a negative '
            'number indicates that the function will always be '
@@ -60,14 +62,16 @@ class Cron(ModelSQL, ModelView):
     def __setup__(cls):
         super(Cron, cls).__setup__()
         cls._error_messages.update({
-            'request_title': 'Scheduled action failed',
-            'request_body': "The following action failed to execute "
-                            "properly: \"%s\"\n Traceback: \n\n%s\n"
-            })
+                'request_title': 'Scheduled action failed',
+                'request_body': ("The following action failed to execute "
+                    "properly: \"%s\"\n%s\n Traceback: \n\n%s\n")
+                })
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
+        cron = cls.__table__()
 
         # Migration from 2.0: rename numbercall, doall and nextcall
         table = TableHandler(cursor, cls, module_name)
@@ -79,10 +83,9 @@ class Cron(ModelSQL, ModelView):
         super(Cron, cls).__register__(module_name)
 
         # Migration from 2.0: work_days removed
-        cursor.execute('UPDATE "%s" '
-            'SET interval_type = %%s '
-            'WHERE interval_type = %%s' % cls._table,
-            ('days', 'work_days'))
+        cursor.execute(*cron.update(
+                [cron.interval_type], ['days'],
+                where=cron.interval_type == 'work_days'))
 
     @staticmethod
     def default_next_call():
@@ -120,33 +123,38 @@ class Cron(ModelSQL, ModelView):
         return _INTERVALTYPES[cron.interval_type](cron.interval_number)
 
     @classmethod
-    def _get_request_values(cls, cron):
+    def send_error_message(cls, cron):
         tb_s = ''.join(traceback.format_exception(*sys.exc_info()))
         tb_s = tb_s.decode('utf-8', 'ignore')
-        name = cls.raise_user_error('request_title',
+        subject = cls.raise_user_error('request_title',
             raise_exception=False)
-        body = cls.raise_user_error('request_body', (cron.name, tb_s),
+        body = cls.raise_user_error('request_body',
+            (cron.name, cron.__url__, tb_s),
             raise_exception=False)
-        values = {
-            'name': name,
-            'priority': '2',
-            'act_from': cron.user.id,
-            'act_to': cron.request_user.id,
-            'body': body,
-            'date_sent': datetime.datetime.now(),
-            'references': [
-                ('create', {
-                    'reference': '%s,%s' % (cls.__name__, cron.id),
-                }),
-            ],
-            'state': 'waiting',
-            'trigger_date': datetime.datetime.now(),
-        }
-        return values
+
+        from_addr = CONFIG['smtp_default_from_email']
+        to_addr = cron.request_user.email
+
+        msg = MIMEText(body, _charset='utf-8')
+        msg['To'] = to_addr
+        msg['From'] = from_addr
+        msg['Subject'] = Header(subject, 'utf-8')
+        logger = logging.getLogger(__name__)
+        if not to_addr:
+            logger.error(msg.as_string())
+        else:
+            try:
+                server = get_smtp_server()
+                server.sendmail(from_addr, to_addr, msg.as_string())
+                server.quit()
+            except Exception, exception:
+                logger.error('Unable to deliver email (%s):\n %s'
+                    % (exception, msg.as_string()))
 
     @classmethod
     def _callback(cls, cron):
         pool = Pool()
+        Config = pool.get('ir.configuration')
         try:
             args = (cron.args or []) and safe_eval(cron.args)
             Model = pool.get(cron.model)
@@ -155,15 +163,12 @@ class Cron(ModelSQL, ModelView):
         except Exception:
             Transaction().cursor.rollback()
 
-            Request = pool.get('res.request')
             req_user = cron.request_user
             language = (req_user.language.code if req_user.language
-                    else CONFIG['language'])
-            with contextlib.nested(Transaction().set_user(cron.user.id),
-                    Transaction().set_context(language=language)):
-                values = cls._get_request_values(cron)
-                Request.create(values)
-            Transaction().cursor.commit()
+                    else Config.get_language())
+            with Transaction().set_user(cron.user.id), \
+                    Transaction().set_context(language=language):
+                cls.send_error_message(cron)
 
     @classmethod
     def run(cls, db_name):

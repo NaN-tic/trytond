@@ -3,8 +3,7 @@
 from trytond.protocols.sslsocket import SSLSocket
 from trytond.protocols.dispatcher import dispatch
 from trytond.config import CONFIG
-from trytond.protocols.common import daemon, GZipRequestHandlerMixin, \
-    RegisterHandlerMixin
+from trytond.protocols.common import daemon, RegisterHandlerMixin
 from trytond.exceptions import UserError, UserWarning, NotLogged, \
     ConcurrencyException
 from trytond import security
@@ -118,8 +117,8 @@ class GenericXMLRPCRequestHandler:
                 if object_type == 'system' and method == 'getCapabilities':
                     return {
                         'introspect': {
-                            'specUrl': 'http://xmlrpc-c.sourceforge.net/' \
-                                    'xmlrpc-c/introspection.html',
+                            'specUrl': ('http://xmlrpc-c.sourceforge.net/'
+                                'xmlrpc-c/introspection.html'),
                             'specVersion': 1,
                         },
                     }
@@ -145,8 +144,7 @@ class GenericXMLRPCRequestHandler:
             security.logout(database_name, user, session)
 
 
-class SimpleXMLRPCRequestHandler(GZipRequestHandlerMixin,
-        RegisterHandlerMixin,
+class SimpleXMLRPCRequestHandler(RegisterHandlerMixin,
         GenericXMLRPCRequestHandler,
         SimpleXMLRPCServer.SimpleXMLRPCRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -179,9 +177,8 @@ class SimpleXMLRPCRequestHandler(GZipRequestHandlerMixin,
 class SecureXMLRPCRequestHandler(SimpleXMLRPCRequestHandler):
 
     def setup(self):
-        self.connection = SSLSocket(self.request)
-        self.rfile = socket._fileobject(self.request, "rb", self.rbufsize)
-        self.wfile = socket._fileobject(self.request, "wb", self.wbufsize)
+        self.request = SSLSocket(self.request)
+        SimpleXMLRPCRequestHandler.setup(self)
 
 
 class SimpleThreadedXMLRPCServer(SocketServer.ThreadingMixIn,
@@ -228,8 +225,7 @@ class SecureThreadedXMLRPCServer(SimpleThreadedXMLRPCServer):
     def __init__(self, server_address, HandlerClass, logRequests=1):
         SimpleThreadedXMLRPCServer.__init__(self, server_address, HandlerClass,
                 logRequests)
-        self.socket = SSLSocket(socket.socket(self.address_family,
-            self.socket_type))
+        self.socket = socket.socket(self.address_family, self.socket_type)
         self.server_bind()
         self.server_activate()
 

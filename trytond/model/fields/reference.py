@@ -1,11 +1,14 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import contextlib
 from types import NoneType
+from sql import Cast, Literal, Column, Query, Expression
+from sql.functions import Substring, Position
 
-from trytond.model.fields.field import Field
-from trytond.transaction import Transaction
-from trytond.pool import Pool
+from .field import Field, SQLType
+from .char import Char
+from ...transaction import Transaction
+from ...pool import Pool
+from ...config import CONFIG
 
 
 class Reference(Field):
@@ -14,10 +17,10 @@ class Reference(Field):
     '''
     _type = 'reference'
 
-    def __init__(self, string='', selection=None, help='', required=False,
-            readonly=False, domain=None, states=None, select=False,
-            on_change=None, on_change_with=None, depends=None,
-            order_field=None, context=None, loading='eager'):
+    def __init__(self, string='', selection=None, selection_change_with=None,
+            help='', required=False, readonly=False, domain=None, states=None,
+            select=False, on_change=None, on_change_with=None, depends=None,
+            context=None, loading='lazy'):
         '''
         :param selection: A list or a function name that returns a list.
             The list must be a list of tuples. First member is an internal name
@@ -26,9 +29,9 @@ class Reference(Field):
         super(Reference, self).__init__(string=string, help=help,
             required=required, readonly=readonly, domain=domain, states=states,
             select=select, on_change=on_change, on_change_with=on_change_with,
-            depends=depends, order_field=order_field, context=context,
-            loading=loading)
+            depends=depends, context=context, loading=loading)
         self.selection = selection or None
+        self.selection_change_with = selection_change_with
 
     __init__.__doc__ += Field.__init__.__doc__
 
@@ -64,8 +67,8 @@ class Reference(Field):
             ref_to_check[ref_model][1].append(i)
 
         # Check if reference ids still exist
-        with contextlib.nested(Transaction().set_context(active_test=False),
-                Transaction().set_user(0)):
+        with Transaction().set_context(active_test=False), \
+                Transaction().set_user(0):
             for ref_model, (ref_ids, ids) in ref_to_check.iteritems():
                 try:
                     pool.get(ref_model)
@@ -92,3 +95,37 @@ class Reference(Field):
             Target = Pool().get(target)
             value = Target(id_)
         super(Reference, self).__set__(inst, value)
+
+    @staticmethod
+    def sql_format(value):
+        if not isinstance(value, (basestring, Query, Expression)):
+            try:
+                value = '%s,%s' % tuple(value)
+            except TypeError:
+                pass
+        return Char.sql_format(value)
+
+    def sql_type(self):
+        db_type = CONFIG['db_type']
+        if db_type == 'mysql':
+            return SQLType('CHAR', 'VARCHAR(255)')
+        return SQLType('VARCHAR', 'VARCHAR')
+
+    def convert_domain(self, domain, tables, Model):
+        if '.' not in domain[0]:
+            return super(Reference, self).convert_domain(domain, tables, Model)
+        pool = Pool()
+        name, operator, value, target = domain[:4]
+        Target = pool.get(target)
+        table, _ = tables[None]
+        name, target_name = name.split('.', 1)
+        column = Column(table, name)
+        target_domain = [(target_name,) + tuple(domain[1:3])
+            + tuple(domain[4:])]
+        if 'active' in Target._fields:
+            target_domain.append(('active', 'in', [True, False]))
+        query = Target.search(target_domain, order=[], query=True)
+        return (Cast(Substring(column,
+                    Position(',', column) + Literal(1)),
+                Model.id.sql_type().base).in_(query)
+            & column.ilike(target + ',%'))

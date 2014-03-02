@@ -59,14 +59,11 @@ class Function(Field):
                 return
         setattr(self._field, name, value)
 
-    def search(self, model, name, clause):
-        '''
-        Call the searcher.
-        Return a list of clauses.
-        '''
+    def convert_domain(self, domain, tables, Model):
+        name, operator, value = domain[:3]
         if not self.searcher:
-            model.raise_user_error('search_function_missing', name)
-        return getattr(model, self.searcher)(name, tuple(clause))
+            Model.raise_user_error('search_function_missing', name)
+        return getattr(Model, self.searcher)(name, domain)
 
     def get(self, ids, Model, name, values=None):
         '''
@@ -74,8 +71,9 @@ class Function(Field):
         If the function has ``names`` in the function definition then
         it will call it with a list of name.
         '''
+        method = getattr(Model, self.getter)
+
         def call(name):
-            method = getattr(Model, self.getter)
             records = Model.browse(ids)
             if not hasattr(method, 'im_self') or method.im_self:
                 return method(records, name)
@@ -84,21 +82,25 @@ class Function(Field):
         if isinstance(name, list):
             names = name
             # Test is the function works with a list of names
-            if 'names' in inspect.getargspec(getattr(Model, self.getter))[0]:
+            if 'names' in inspect.getargspec(method)[0]:
                 return call(names)
             return dict((name, call(name)) for name in names)
         else:
             # Test is the function works with a list of names
-            if 'names' in inspect.getargspec(getattr(Model, self.getter))[0]:
+            if 'names' in inspect.getargspec(method)[0]:
                 name = [name]
             return call(name)
 
-    def set(self, ids, Model, name, value):
+    def set(self, Model, name, ids, value, *args):
         '''
         Call the setter.
         '''
         if self.setter:
-            getattr(Model, self.setter)(Model.browse(ids), name, value)
+            # TODO change setter API to use sequence of records, value
+            setter = getattr(Model, self.setter)
+            args = iter((ids, value) + args)
+            for ids, value in zip(args, args):
+                setter(Model.browse(ids), name, value)
 
     def __set__(self, inst, value):
         self._field.__set__(inst, value)

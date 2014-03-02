@@ -18,25 +18,29 @@ class ModelSingleton(ModelStorage):
             return singletons[0]
 
     @classmethod
-    def create(cls, values):
+    def create(cls, vlist):
+        assert len(vlist) == 1
         singleton = cls.get_singleton()
-        if singleton:
-            cls.write([singleton], values)
-        else:
-            singleton = super(ModelSingleton, cls).create(values)
-        return singleton
+        if not singleton:
+            return super(ModelSingleton, cls).create(vlist)
+        cls.write([singleton], vlist[0])
+        return [singleton]
 
     @classmethod
     def read(cls, ids, fields_names=None):
         singleton = cls.get_singleton()
         if not singleton:
-            res = cls.default_get(fields_names, with_rec_name=False)
             if not fields_names:
-                fields_names = (set(cls._fields.keys()
-                    + cls._inherit_fields.keys()))
+                fields_names = cls._fields.keys()
+            fname_no_rec_name = [f for f in fields_names if '.' not in f]
+            res = cls.default_get(fname_no_rec_name,
+                with_rec_name=len(fname_no_rec_name) != len(fields_names))
             for field_name in fields_names:
                 if field_name not in res:
-                    res[field_name] = False
+                    res[field_name] = None
+            for field_name in res.keys():
+                if field_name not in fields_names:
+                    del res[field_name]
             res['id'] = ids[0]
             return [res]
         res = super(ModelSingleton, cls).read([singleton.id],
@@ -45,11 +49,15 @@ class ModelSingleton(ModelStorage):
         return res
 
     @classmethod
-    def write(cls, records, values):
+    def write(cls, records, values, *args):
         singleton = cls.get_singleton()
         if not singleton:
-            return cls.create(values)
-        return super(ModelSingleton, cls).write([singleton], values)
+            singleton, = cls.create([values])
+        actions = (records, values) + args
+        args = []
+        for values in actions[1:None:2]:
+            args.extend(([singleton], values))
+        return super(ModelSingleton, cls).write(*args)
 
     @classmethod
     def delete(cls, records):
@@ -75,12 +83,13 @@ class ModelSingleton(ModelStorage):
         return res
 
     @classmethod
-    def default_get(cls, fields_names, with_rec_name=True):
+    def default_get(cls, fields_names, with_rec_name=True,
+            with_on_change=True):
         if '_timestamp' in fields_names:
             fields_names = list(fields_names)
             fields_names.remove('_timestamp')
         default = super(ModelSingleton, cls).default_get(fields_names,
-                with_rec_name=with_rec_name)
+                with_rec_name=with_rec_name, with_on_change=with_on_change)
         singleton = cls.get_singleton()
         if singleton:
             if with_rec_name:

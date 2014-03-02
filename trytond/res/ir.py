@@ -1,7 +1,7 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 from ..model import ModelSQL, fields
-from ..backend import TableHandler
+from .. import backend
 from ..transaction import Transaction
 from ..pool import Pool, PoolMeta
 
@@ -24,11 +24,12 @@ class UIMenuGroup(ModelSQL):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         # Migration from 1.0 table name change
         TableHandler.table_rename(cursor, 'ir_ui_menu_group_rel', cls._table)
         TableHandler.sequence_rename(cursor, 'ir_ui_menu_group_rel_id_seq',
-                cls._table + '_id_seq')
+            cls._table + '_id_seq')
         # Migration from 2.0 menu_id and gid renamed into menu group
         table = TableHandler(cursor, cls, module_name)
         table.column_rename('menu_id', 'menu')
@@ -36,15 +37,15 @@ class UIMenuGroup(ModelSQL):
         super(UIMenuGroup, cls).__register__(module_name)
 
     @classmethod
-    def create(cls, vals):
-        res = super(UIMenuGroup, cls).create(vals)
+    def create(cls, vlist):
+        res = super(UIMenuGroup, cls).create(vlist)
         # Restart the cache on the domain_get method
         Pool().get('ir.rule')._domain_get_cache.clear()
         return res
 
     @classmethod
-    def write(cls, records, vals):
-        super(UIMenuGroup, cls).write(records, vals)
+    def write(cls, records, values, *args):
+        super(UIMenuGroup, cls).write(records, values, *args)
         # Restart the cache on the domain_get method
         Pool().get('ir.rule')._domain_get_cache.clear()
 
@@ -65,11 +66,12 @@ class ActionGroup(ModelSQL):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         # Migration from 1.0 table name change
         TableHandler.table_rename(cursor, 'ir_action_group_rel', cls._table)
         TableHandler.sequence_rename(cursor, 'ir_action_group_rel_id_seq',
-                cls._table + '_id_seq')
+            cls._table + '_id_seq')
         # Migration from 2.0 action_id and gid renamed into action and group
         table = TableHandler(cursor, cls, module_name)
         table.column_rename('action_id', 'action')
@@ -77,23 +79,28 @@ class ActionGroup(ModelSQL):
         super(ActionGroup, cls).__register__(module_name)
 
     @classmethod
-    def create(cls, vals):
+    def create(cls, vlist):
         Action = Pool().get('ir.action')
-        if vals.get('action'):
-            vals = vals.copy()
-            vals['action'] = Action.get_action_id(vals['action'])
-        res = super(ActionGroup, cls).create(vals)
+        vlist = [x.copy() for x in vlist]
+        for vals in vlist:
+            if vals.get('action'):
+                vals['action'] = Action.get_action_id(vals['action'])
+        res = super(ActionGroup, cls).create(vlist)
         # Restart the cache on the domain_get method
         Pool().get('ir.rule')._domain_get_cache.clear()
         return res
 
     @classmethod
-    def write(cls, records, vals):
+    def write(cls, records, values, *args):
         Action = Pool().get('ir.action')
-        if vals.get('action'):
-            vals = vals.copy()
-            vals['action'] = Action.get_action_id(vals['action'])
-        super(ActionGroup, cls).write(records, vals)
+        actions = iter((records, values) + args)
+        args = []
+        for records, values in zip(actions, actions):
+            if values.get('action'):
+                values = values.copy()
+                values['action'] = Action.get_action_id(values['action'])
+            args.extend((records, values))
+        super(ActionGroup, cls).write(*args)
         # Restart the cache on the domain_get method
         Pool().get('ir.rule')._domain_get_cache.clear()
 
@@ -107,19 +114,24 @@ class ActionGroup(ModelSQL):
 class ModelFieldGroup(ModelSQL):
     "Model Field Group Rel"
     __name__ = 'ir.model.field-res.group'
-    field_id = fields.Many2One('ir.model.field', 'Model Field',
+    field = fields.Many2One('ir.model.field', 'Model Field',
             ondelete='CASCADE', select=True, required=True)
-    group_id = fields.Many2One('res.group', 'Group', ondelete='CASCADE',
+    group = fields.Many2One('res.group', 'Group', ondelete='CASCADE',
             select=True, required=True)
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         # Migration from 1.0 table name change
         TableHandler.table_rename(cursor, 'ir_model_field_group_rel',
             cls._table)
         TableHandler.sequence_rename(cursor, 'ir_model_field_group_rel_id_seq',
             cls._table + '_id_seq')
+        table = TableHandler(cursor, cls, module_name)
+        # Migration from 2.6: field_id and group_id renamed to field and group
+        table.column_rename('field_id', 'field')
+        table.column_rename('group_id', 'group')
         super(ModelFieldGroup, cls).__register__(module_name)
 
 
@@ -137,17 +149,17 @@ class ModelButtonGroup(ModelSQL):
         return True
 
     @classmethod
-    def create(cls, values):
+    def create(cls, vlist):
         pool = Pool()
-        result = super(ModelButtonGroup, cls).create(values)
+        result = super(ModelButtonGroup, cls).create(vlist)
         # Restart the cache for get_groups
         pool.get('ir.model.button')._groups_cache.clear()
         return result
 
     @classmethod
-    def write(cls, records, values):
+    def write(cls, records, values, *args):
         pool = Pool()
-        super(ModelButtonGroup, cls).write(records, values)
+        super(ModelButtonGroup, cls).write(records, values, *args)
         # Restart the cache for get_groups
         pool.get('ir.model.button')._groups_cache.clear()
 
@@ -169,11 +181,12 @@ class RuleGroupGroup(ModelSQL):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         # Migration from 1.0 table name change
         TableHandler.table_rename(cursor, 'group_rule_group_rel', cls._table)
         TableHandler.sequence_rename(cursor, 'group_rule_group_rel_id_seq',
-                cls._table + '_id_seq')
+            cls._table + '_id_seq')
         # Migration from 2.0 rule_group_id and group_id renamed into rule_group
         # and group
         table = TableHandler(cursor, cls, module_name)
@@ -192,11 +205,12 @@ class RuleGroupUser(ModelSQL):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         # Migration from 1.0 table name change
         TableHandler.table_rename(cursor, 'user_rule_group_rel', cls._table)
         TableHandler.sequence_rename(cursor, 'user_rule_group_rel_id_seq',
-                cls._table + '_id_seq')
+            cls._table + '_id_seq')
         # Migration from 2.0 rule_group_id and user_id renamed into rule_group
         # and user
         table = TableHandler(cursor, cls, module_name)
@@ -209,8 +223,8 @@ class Lang:
     __name__ = 'ir.lang'
 
     @classmethod
-    def write(cls, langs, vals):
-        super(Lang, cls).write(langs, vals)
+    def write(cls, langs, values, *args):
+        super(Lang, cls).write(langs, values, *args)
         # Restart the cache for get_preferences
         Pool().get('res.user')._get_preferences_cache.clear()
 
@@ -238,17 +252,17 @@ class SequenceTypeGroup(ModelSQL):
         Rule._domain_get_cache.clear()
 
     @classmethod
-    def create(cls, vals):
+    def create(cls, vlist):
         Rule = Pool().get('ir.rule')
-        res = super(SequenceTypeGroup, cls).create(vals)
+        res = super(SequenceTypeGroup, cls).create(vlist)
         # Restart the cache on the domain_get method of ir.rule
         Rule._domain_get_cache.clear()
         return res
 
     @classmethod
-    def write(cls, records, vals):
+    def write(cls, records, values, *args):
         Rule = Pool().get('ir.rule')
-        super(SequenceTypeGroup, cls).write(records, vals)
+        super(SequenceTypeGroup, cls).write(records, values, *args)
         # Restart the cache on the domain_get method
         Rule._domain_get_cache.clear()
 
@@ -295,19 +309,19 @@ class ModuleConfigWizardItem:
     __name__ = 'ir.module.module.config_wizard.item'
 
     @classmethod
-    def create(cls, values):
+    def create(cls, vlist):
         pool = Pool()
         User = pool.get('res.user')
-        result = super(ModuleConfigWizardItem, cls).create(values)
+        result = super(ModuleConfigWizardItem, cls).create(vlist)
         # Restart the cache for get_preferences
         User._get_preferences_cache.clear()
         return result
 
     @classmethod
-    def write(cls, items, values):
+    def write(cls, items, values, *args):
         pool = Pool()
         User = pool.get('res.user')
-        super(ModuleConfigWizardItem, cls).write(items, values)
+        super(ModuleConfigWizardItem, cls).write(items, values, *args)
         # Restart the cache for get_preferences
         User._get_preferences_cache.clear()
 

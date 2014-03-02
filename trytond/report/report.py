@@ -22,7 +22,7 @@ except ImportError:
 from genshi.filters import Translator
 import lxml.etree
 from trytond.config import CONFIG
-from trytond.pool import Pool, PoolMeta
+from trytond.pool import Pool, PoolBase
 from trytond.transaction import Transaction
 from trytond.url import URLMixin
 from trytond.rpc import RPC
@@ -82,7 +82,7 @@ class TranslateFactory:
                 ('value', '!=', ''),
                 ('value', '!=', None),
                 ('fuzzy', '=', False),
-                ('res_id', '=', None),
+                ('res_id', '=', -1),
                 ])
             for translation in translations:
                 self.cache[self.language][translation.src] = translation.value
@@ -92,18 +92,14 @@ class TranslateFactory:
         self.language = language
 
 
-class Report(URLMixin):
-    __metaclass__ = PoolMeta
+class Report(URLMixin, PoolBase):
 
     @classmethod
     def __setup__(cls):
+        super(Report, cls).__setup__()
         cls.__rpc__ = {
             'execute': RPC(),
             }
-
-    @classmethod
-    def __register__(cls, module_name):
-        pass
 
     @classmethod
     def execute(cls, ids, data):
@@ -126,8 +122,9 @@ class Report(URLMixin):
             raise Exception('Error', 'Report (%s) not find!' % cls.__name__)
         action_report = action_reports[0]
         records = None
-        if action_report.model:
-            records = cls._get_records(ids, action_report.model, data)
+        model = action_report.model or data.get('model')
+        if model:
+            records = cls._get_records(ids, model, data)
         type, data = cls.parse(action_report, records, data, {})
         return (type, buffer(data), action_report.direct_print,
             action_report.name)
@@ -314,30 +311,20 @@ class Report(URLMixin):
             date=False, currency=None, symbol=True):
         pool = Pool()
         Lang = pool.get('ir.lang')
+        Config = pool.get('ir.configuration')
 
-        if date:
+        if date or isinstance(value, datetime.date):
+            if date:
+                warnings.warn('date parameter of format_lang is deprecated, '
+                    'use a datetime.date as value instead', DeprecationWarning,
+                    stacklevel=2)
             if lang:
                 locale_format = lang.date
                 code = lang.code
             else:
                 locale_format = Lang.default_date()
-                code = CONFIG['language']
-            if not isinstance(value, time.struct_time):
-                # assume string, parse it
-                if len(str(value)) == 10:
-                    # length of date like 2001-01-01 is ten
-                    # assume format '%Y-%m-%d'
-                    string_pattern = '%Y-%m-%d'
-                else:
-                    # assume format '%Y-%m-%d %H:%M:%S'
-                    value = str(value)[:19]
-                    locale_format = locale_format + ' %H:%M:%S'
-                    string_pattern = '%Y-%m-%d %H:%M:%S'
-                date = datetime.datetime(*time.strptime(str(value),
-                    string_pattern)[:6])
-            else:
-                date = datetime.datetime(*(value.timetuple()[:6]))
-            return Lang.strftime(date, code, locale_format)
+                code = Config.get_language()
+            return Lang.strftime(value, code, locale_format)
         if currency:
             return Lang.currency(lang, value, currency, grouping=grouping,
                 symbol=symbol)

@@ -11,14 +11,14 @@ from trytond.tests.test_tryton import (POOL, DB_NAME, USER, CONTEXT,
 class WorkflowTestCase(unittest.TestCase):
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.workflow = POOL.get('test.workflowed')
 
     # TODO add test for Workflow.transition
     def test0010transition(self):
         'Test transition'
         with Transaction().start(DB_NAME, USER, context=CONTEXT):
-            wkf = self.workflow.create({})
+            wkf, = self.workflow.create([{}])
 
             self.workflow.run([wkf])
             self.assertEqual(wkf.state, 'running')
@@ -31,7 +31,3 @@ class WorkflowTestCase(unittest.TestCase):
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(WorkflowTestCase)
-
-
-if __name__ == '__main__':
-    unittest.TextTestRunner(verbosity=2).run(suite())

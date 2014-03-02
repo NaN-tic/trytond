@@ -11,7 +11,7 @@ this repository contains the full copyright notices and license terms. -->
             <label name="login"/>
             <field name="login"/>
             <label name="password"/>
-            <field name="password"/>
+            <field name="password" widget="sha"/>
             <label name="email"/>
             <field name="email" widget="email"/>
             <separator name="signature" colspan="4"/>
@@ -29,8 +29,6 @@ this repository contains the full copyright notices and license terms. -->
         <page string="Preferences" col="2" id="preferences">
             <label name="language"/>
             <field name="language" widget="selection"/>
-            <label name="timezone"/>
-            <field name="timezone"/>
         </page>
     </notebook>
 </form>

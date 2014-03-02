@@ -4,22 +4,22 @@
 import datetime
 import time
 import logging
-import contextlib
 import traceback
 import sys
 import csv
+import warnings
 try:
     import cStringIO as StringIO
 except ImportError:
     import StringIO
 
 from decimal import Decimal
-from itertools import islice, ifilter, ifilterfalse, chain
+from itertools import islice, ifilter, chain, izip
 from functools import reduce
 
 from trytond.model import Model
 from trytond.model import fields
-from trytond.tools import safe_eval, reduce_domain
+from trytond.tools import safe_eval, reduce_domain, memoize
 from trytond.pyson import PYSONEncoder, PYSONDecoder, PYSON
 from trytond.const import OPERATORS, RECORD_CACHE_SIZE, BROWSE_FIELD_TRESHOLD
 from trytond.transaction import Transaction
@@ -38,9 +38,9 @@ class ModelStorage(Model):
     """
 
     create_uid = fields.Many2One('res.user', 'Create User', readonly=True)
-    create_date = fields.DateTime('Create Date', readonly=True)
+    create_date = fields.Timestamp('Create Date', readonly=True)
     write_uid = fields.Many2One('res.user', 'Write User', readonly=True)
-    write_date = fields.DateTime('Write Date', readonly=True)
+    write_date = fields.Timestamp('Write Date', readonly=True)
     rec_name = fields.Function(fields.Char('Name'), 'get_rec_name',
             searcher='search_rec_name')
 
@@ -49,9 +49,11 @@ class ModelStorage(Model):
         super(ModelStorage, cls).__setup__()
         if issubclass(cls, ModelView):
             cls.__rpc__.update({
-                    'create': RPC(readonly=False, result=int),
+                    'create': RPC(readonly=False,
+                        result=lambda r: map(int, r)),
                     'read': RPC(),
-                    'write': RPC(readonly=False, instantiate=0),
+                    'write': RPC(readonly=False,
+                        instantiate=slice(0, None, 2)),
                     'delete': RPC(readonly=False, instantiate=0),
                     'copy': RPC(readonly=False, instantiate=0,
                         result=lambda r: map(int, r)),
@@ -74,23 +76,24 @@ class ModelStorage(Model):
         return datetime.datetime.today()
 
     @classmethod
-    def create(cls, values):
+    def create(cls, vlist):
         '''
-        Create record and return an instance.
+        Returns the list of created records.
         '''
         pool = Pool()
         ModelAccess = pool.get('ir.model.access')
         ModelFieldAccess = pool.get('ir.model.field.access')
 
         ModelAccess.check(cls.__name__, 'create')
-        ModelFieldAccess.check(cls.__name__,
-            [x for x in values if x in cls._fields], 'write')
+
+        all_fields = list(set(chain(*(v.iterkeys() for v in vlist))))
+        ModelFieldAccess.check(cls.__name__, all_fields, 'write')
 
         # Increase transaction counter
         Transaction().counter += 1
 
     @classmethod
-    def trigger_create(cls, record):
+    def trigger_create(cls, records):
         '''
         Trigger create actions
         '''
@@ -99,8 +102,12 @@ class ModelStorage(Model):
         if not triggers:
             return
         for trigger in triggers:
-            if Trigger.eval(trigger, record):
-                Trigger.trigger_action([record], trigger)
+            triggers = []
+            for record in records:
+                if Trigger.eval(trigger, record):
+                    triggers.append(record)
+            if triggers:
+                Trigger.trigger_action(triggers, trigger)
 
     @classmethod
     def read(cls, ids, fields_names=None):
@@ -119,7 +126,7 @@ class ModelStorage(Model):
         return []
 
     @classmethod
-    def write(cls, records, values):
+    def write(cls, records, values, *args):
         '''
         Write values on records.
         '''
@@ -130,15 +137,21 @@ class ModelStorage(Model):
         ModelAccess.check(cls.__name__, 'write')
         ModelFieldAccess.check(cls.__name__,
             [x for x in values if x in cls._fields], 'write')
-        if not cls.check_xml_record(records, values):
-            cls.raise_user_error('write_xml_record',
-                    error_description='xml_record_desc')
+
+        assert not len(args) % 2
+        actions = iter((records, values) + args)
+        all_records = []
+        for records, values in zip(actions, actions):
+            if not cls.check_xml_record(records, values):
+                cls.raise_user_error('write_xml_record',
+                        error_description='xml_record_desc')
+            all_records += records
 
         # Increase transaction counter
         Transaction().counter += 1
 
         # Clean local cache
-        for record in records:
+        for record in all_records:
             local_cache = record._local_cache.get(record.id)
             if local_cache:
                 local_cache.clear()
@@ -146,7 +159,7 @@ class ModelStorage(Model):
         # Clean cursor cache
         for cache in Transaction().cursor.cache.itervalues():
             if cls.__name__ in cache:
-                for record in records:
+                for record in all_records:
                     if record.id in cache[cls.__name__]:
                         cache[cls.__name__][record.id].clear()
 
@@ -238,16 +251,15 @@ class ModelStorage(Model):
 
         def convert_data(field_defs, data):
             data = data.copy()
-            data_o2m = {}
             for field_name in field_defs:
                 ftype = field_defs[field_name]['type']
 
                 if field_name in (
-                    'create_date',
-                    'create_uid',
-                    'write_date',
-                    'write_uid',
-                    ):
+                        'create_date',
+                        'create_uid',
+                        'write_date',
+                        'write_uid',
+                        ):
                     del data[field_name]
 
                 if field_name in default:
@@ -259,50 +271,31 @@ class ModelStorage(Model):
                 elif ftype in ('many2one', 'one2one'):
                     try:
                         data[field_name] = data[field_name] and \
-                                data[field_name][0]
+                            data[field_name][0]
                     except Exception:
                         pass
                 elif ftype in ('one2many',):
                     if data[field_name]:
-                        data_o2m[field_name] = data[field_name]
-                    data[field_name] = False
+                        data[field_name] = [('copy', data[field_name])]
                 elif ftype == 'many2many':
                     if data[field_name]:
-                        data[field_name] = [('set', data[field_name])]
+                        data[field_name] = [('add', data[field_name])]
             if 'id' in data:
                 del data['id']
-            return data, data_o2m
+            return data
 
-        new_ids = {}
         fields_names = [n for n, f in cls._fields.iteritems()
             if (not isinstance(f, fields.Function)
                 or isinstance(f, fields.Property))]
         ids = map(int, records)
         datas = cls.read(ids, fields_names=fields_names)
         field_defs = cls.fields_get(fields_names=fields_names)
+        to_create = []
         for data in datas:
-            data_id = data['id']
-            data, data_o2m = convert_data(field_defs, data)
-            new_record = cls.create(data)
-            if new_record:
-                new_ids[data_id] = new_record.id
-            else:
-                continue
-            for field_name in data_o2m:
-                Relation = pool.get(
-                        field_defs[field_name]['relation'])
-                relation_field = field_defs[field_name]['relation_field']
-                if relation_field:
-                    if relation_field in Relation._fields:
-                        field = Relation._fields[relation_field]
-                    else:
-                        field = Relation._inherit_fields[relation_field][2]
-                    if field._type == 'reference':
-                        value = str(new_record)
-                    else:
-                        value = new_record.id
-                    Relation.copy(Relation.browse(data_o2m[field_name]),
-                        default={relation_field: value})
+            data = convert_data(field_defs, data)
+            to_create.append(data)
+        new_records = cls.create(to_create)
+        new_ids = dict(izip(ids, map(int, new_records)))
 
         fields_translate = {}
         for field_name, field in field_defs.iteritems():
@@ -311,21 +304,20 @@ class ModelStorage(Model):
                 fields_translate[field_name] = field
 
         if fields_translate:
-            lang_ids = Lang.search([
+            langs = Lang.search([
                 ('translatable', '=', True),
                 ])
-            if lang_ids:
-                lang_ids += Lang.search([
-                    ('code', '=', CONFIG['language']),
-                    ])
-                langs = Lang.browse(lang_ids)
+            if langs:
                 for lang in langs:
-                    with Transaction().set_context(language=lang.code):
+                    # Prevent fuzzing translations when copying as the terms
+                    # should be the same.
+                    with Transaction().set_context(language=lang.code,
+                            fuzzy_translation=False):
                         datas = cls.read(ids,
                                 fields_names=fields_translate.keys() + ['id'])
                         for data in datas:
                             data_id = data['id']
-                            data, _ = convert_data(fields_translate, data)
+                            data = convert_data(fields_translate, data)
                             cls.write([cls(new_ids[data_id])], data)
         return cls.browse(new_ids.values())
 
@@ -358,8 +350,7 @@ class ModelStorage(Model):
         records = cls.search(domain, offset=offset, limit=limit, order=order)
 
         if not fields_names:
-            fields_names = list(set(cls._fields.keys() \
-                    + cls._inherit_fields.keys()))
+            fields_names = cls._fields.keys()
         if 'id' not in fields_names:
             fields_names.append('id')
         return cls.read(map(int, records), fields_names)
@@ -370,10 +361,9 @@ class ModelStorage(Model):
         domain = reduce_domain(domain)
         # if the object has a field named 'active', filter out all inactive
         # records unless they were explicitely asked for
-        if not (('active' in cls._fields
-            or 'active' in cls._inherit_fields.keys())
-            and (active_test
-                and Transaction().context.get('active_test', True))):
+        if not ('active' in cls._fields
+                and active_test
+                and Transaction().context.get('active_test', True)):
             return domain
 
         def process(domain):
@@ -382,18 +372,19 @@ class ModelStorage(Model):
             while i < len(domain):
                 arg = domain[i]
                 #add test for xmlrpc that doesn't handle tuple
-                if isinstance(arg, tuple) or \
-                        (isinstance(arg, list) and len(arg) > 2 and \
-                        arg[1] in OPERATORS):
+                if (isinstance(arg, tuple)
+                        or (isinstance(arg, list)
+                            and len(arg) > 2
+                            and arg[1] in OPERATORS)):
                     if arg[0] == 'active':
                         active_found = True
                 elif isinstance(arg, list):
                     domain[i] = process(domain[i])
                 i += 1
             if not active_found:
-                if domain and ((isinstance(domain[0], basestring) \
-                        and domain[0] == 'AND') \
-                        or (not isinstance(domain[0], basestring))):
+                if (domain and ((isinstance(domain[0], basestring)
+                                and domain[0] == 'AND')
+                            or (not isinstance(domain[0], basestring)))):
                     domain.append(('active', '=', True))
                 else:
                     domain = ['AND', domain, ('active', '=', True)]
@@ -406,8 +397,7 @@ class ModelStorage(Model):
         It is used by the Function field rec_name.
         '''
         rec_name = self._rec_name
-        if (rec_name not in self._fields
-                and rec_name not in self._inherit_fields):
+        if rec_name not in self._fields:
             rec_name = 'id'
         return unicode(getattr(self, rec_name))
 
@@ -417,10 +407,20 @@ class ModelStorage(Model):
         Return a list of arguments for search on rec_name.
         '''
         rec_name = cls._rec_name
-        if (rec_name not in cls._fields
-                and rec_name not in cls._inherit_fields):
+        if rec_name not in cls._fields:
             return []
         return [(rec_name,) + tuple(clause[1:])]
+
+    @classmethod
+    def search_global(cls, text):
+        '''
+        Yield tuples (id, rec_name, icon) for text
+        '''
+        # TODO improve search clause
+        for record in cls.search([
+                    ('rec_name', 'ilike', '%%%s%%' % text),
+                    ]):
+            yield record.id, record.rec_name, None
 
     @classmethod
     def browse(cls, ids):
@@ -448,13 +448,7 @@ class ModelStorage(Model):
                     break
                 field_name = fields_tree[i]
                 eModel = pool.get(value.__name__)
-                if field_name in eModel._fields:
-                    field = eModel._fields[field_name]
-                elif field_name in eModel._inherit_fields:
-                    field = eModel._inherit_fields[field_name][2]
-                else:
-                    raise Exception('Field %s not available on object "%s"'
-                        % (field_name, eModel.__name__))
+                field = eModel._fields[field_name]
                 if field.states and 'invisible' in field.states:
                     pyson_invisible = PYSONEncoder().encode(
                             field.states['invisible'])
@@ -483,7 +477,7 @@ class ModelStorage(Model):
                             for child_fpos in xrange(len(fields_names)):
                                 if child_lines and child_lines[0][child_fpos]:
                                     data[child_fpos] = \
-                                            child_lines[0][child_fpos]
+                                        child_lines[0][child_fpos]
                             lines += child_lines[1:]
                             first = False
                         else:
@@ -524,119 +518,122 @@ class ModelStorage(Model):
         '''
         pool = Pool()
 
-        def process_lines(data, prefix, fields_def, position=0):
+        def warn(msgname, *args):
+            msg = cls.raise_user_error(msgname, args,
+                    raise_exception=False)
+            logger.warn(msg)
 
-            def warn(msgname, *args):
-                msg = cls.raise_user_error(msgname, args,
-                        raise_exception=False)
-                warnings.warn(msg)
+        def get_selection(selection, value, field):
+            res = None
+            if not isinstance(selection, (tuple, list)):
+                selection = getattr(cls, selection)()
+            for key, _ in selection:
+                if str(key) == value:
+                    res = key
+                    break
+            if value and not res:
+                warn('not_found_in_selection', value, '/'.join(field))
+            return res
 
-            def get_selection(selection, value):
+        @memoize(1000)
+        def get_many2one(relation, value):
+            if not value:
+                return None
+            Relation = pool.get(relation)
+            res = Relation.search([
+                ('rec_name', '=', value),
+                ], limit=2)
+            if len(res) < 1:
+                warn('relation_not_found', value, relation)
                 res = None
-                if not isinstance(selection, (tuple, list)):
-                    selection = getattr(cls, selection)()
-                for key, _ in selection:
-                    if str(key) == value:
-                        res = key
-                        break
-                if value and not res:
-                    warn('not_found_in_selection', value, '/'.join(field))
-                return res
+            elif len(res) > 1:
+                warn('too_many_relations_found', value, relation)
+                res = None
+            else:
+                res = res[0].id
+            return res
 
-            def get_many2one(relation, value):
-                if not value:
-                    return None
-                Relation = pool.get(relation)
-                res = Relation.search([
-                    ('rec_name', '=', value),
+        @memoize(1000)
+        def get_many2many(relation, value):
+            if not value:
+                return None
+            res = []
+            Relation = pool.get(relation)
+            for word in csv.reader(StringIO.StringIO(value), delimiter=',',
+                    quoting=csv.QUOTE_NONE, escapechar='\\').next():
+                res2 = Relation.search([
+                    ('rec_name', '=', word),
                     ], limit=2)
-                if len(res) < 1:
-                    warn('relation_not_found', value, relation)
-                    res = None
-                elif len(res) > 1:
-                    warn('too_many_relations_found', value, relation)
-                    res = None
+                if len(res2) < 1:
+                    warn('relation_not_found', word, relation)
+                elif len(res2) > 1:
+                    warn('too_many_relations_found', word, relation)
                 else:
-                    res = res[0].id
-                return res
+                    res.extend(res2)
+            if len(res):
+                res = [('add', [x.id for x in res])]
+            return res
 
-            def get_many2many(relation, value):
-                if not value:
-                    return None
-                res = []
-                Relation = pool.get(relation)
-                for word in csv.reader(StringIO.StringIO(value), delimiter=',',
-                        quoting=csv.QUOTE_NONE, escapechar='\\').next():
-                    res2 = Relation.search([
-                        ('rec_name', '=', word),
-                        ], limit=2)
-                    if len(res2) < 1:
-                        warn('relation_not_found', word, relation)
-                    elif len(res2) > 1:
-                        warn('too_many_relations_found', word, relation)
-                    else:
-                        res.extend(res2)
-                if len(res):
-                    res = [('set', [x.id for x in res])]
-                return res
+        def get_one2one(relation, value):
+            return ('add', get_many2one(relation, value))
 
-            def get_one2one(relation, value):
-                return ('set', get_many2one(relation, value))
+        @memoize(1000)
+        def get_reference(value, field):
+            if not value:
+                return None
+            try:
+                relation, value = value.split(',', 1)
+            except Exception:
+                warn('reference_syntax_error', value, '/'.join(field))
+                return None
+            Relation = pool.get(relation)
+            res = Relation.search([
+                ('rec_name', '=', value),
+                ], limit=2)
+            if len(res) < 1:
+                warn('relation_not_found', value, relation)
+                res = None
+            elif len(res) > 1:
+                warn('too_many_relations_found', value, relation)
+                res = None
+            else:
+                res = '%s,%s' % (relation, res[0].id)
+            return res
 
-            def get_reference(value):
-                if not value:
-                    return None
+        @memoize(1000)
+        def get_by_id(value, field):
+            if not value:
+                return None
+            relation = None
+            ftype = fields_def[field[-1][:-3]]['type']
+            if ftype == 'many2many':
+                value = csv.reader(StringIO.StringIO(value), delimiter=',',
+                        quoting=csv.QUOTE_NONE, escapechar='\\').next()
+            elif ftype == 'reference':
                 try:
                     relation, value = value.split(',', 1)
                 except Exception:
                     warn('reference_syntax_error', value, '/'.join(field))
                     return None
-                Relation = pool.get(relation)
-                res = Relation.search([
-                    ('rec_name', '=', value),
-                    ], limit=2)
-                if len(res) < 1:
-                    warn('relation_not_found', value, relation)
-                    res = None
-                elif len(res) > 1:
-                    warn('too_many_relations_found', value, relation)
-                    res = None
-                else:
-                    res = '%s,%s' % (relation, res[0].id)
-                return res
+                value = [value]
+            else:
+                value = [value]
+            res_ids = []
+            for word in value:
+                try:
+                    module, xml_id = word.rsplit('.', 1)
+                except Exception:
+                    warn('xml_id_syntax_error', word, '/'.join(field))
+                    continue
+                db_id = ModelData.get_id(module, xml_id)
+                res_ids.append(db_id)
+            if ftype == 'many2many' and res_ids:
+                return [('add', res_ids)]
+            elif ftype == 'reference' and res_ids:
+                return '%s,%s' % (relation, str(res_ids[0]))
+            return res_ids and res_ids[0] or False
 
-            def get_by_id(value):
-                if not value:
-                    return None
-                relation = None
-                ftype = fields_def[field[-1][:-3]]['type']
-                if ftype == 'many2many':
-                    value = csv.reader(StringIO.StringIO(value), delimiter=',',
-                            quoting=csv.QUOTE_NONE, escapechar='\\').next()
-                elif ftype == 'reference':
-                    try:
-                        relation, value = value.split(',', 1)
-                    except Exception:
-                        warn('reference_syntax_error', value, '/'.join(field))
-                        return None
-                    value = [value]
-                else:
-                    value = [value]
-                res_ids = []
-                for word in value:
-                    try:
-                        module, xml_id = word.rsplit('.', 1)
-                    except Exception:
-                        warn('xml_id_syntax_error', word, '/'.join(field))
-                        continue
-                    db_id = ModelData.get_id(module, xml_id)
-                    res_ids.append(db_id)
-                if ftype == 'many2many' and res_ids:
-                    return [('set', res_ids)]
-                elif ftype == 'reference' and res_ids:
-                    return '%s,%s' % (relation, str(res_ids[0]))
-                return res_ids and res_ids[0] or False
-
+        def process_lines(data, prefix, fields_def, position=0):
             line = data[position]
             row = {}
             translate = {}
@@ -651,7 +648,7 @@ class ModelStorage(Model):
                 is_prefix_len = (len(field) == (prefix_len + 1))
                 value = line[i]
                 if is_prefix_len and field[-1].endswith(':id'):
-                    row[field[0][:-3]] = get_by_id(value)
+                    row[field[0][:-3]] = get_by_id(value, field)
                 elif is_prefix_len and ':lang=' in field[-1]:
                     field_name, lang = field[-1].split(':lang=')
                     translate.setdefault(lang, {})[field_name] = value or False
@@ -675,13 +672,16 @@ class ModelStorage(Model):
                     elif field_type == 'numeric':
                         res = Decimal(value) if value else None
                     elif field_type == 'date':
-                        res = value and datetime.date(*time.strptime(value,
-                            '%Y-%m-%d')[:3])
+                        res = (datetime.date(
+                                *time.strptime(value, '%Y-%m-%d')[:3])
+                            if value else None)
                     elif field_type == 'datetime':
-                        res = value and datetime.datetime(*time.strptime(value,
-                            '%Y-%m-%d %H:%M:%S')[:6])
+                        res = (datetime.datetime(
+                                *time.strptime(value, '%Y-%m-%d %H:%M:%S')[:6])
+                            if value else None)
                     elif field_type == 'selection':
-                        res = get_selection(this_field_def['selection'], value)
+                        res = get_selection(this_field_def['selection'],
+                            value, field)
                     elif field_type == 'many2one':
                         res = get_many2one(this_field_def['relation'], value)
                     elif field_type == 'many2many':
@@ -689,7 +689,7 @@ class ModelStorage(Model):
                     elif field_type == 'one2one':
                         res = get_one2one(this_field_def['relation'], value)
                     elif field_type == 'reference':
-                        res = get_reference(value)
+                        res = get_reference(value, field)
                     else:
                         res = value or None
                     row[field[-1]] = res
@@ -706,22 +706,22 @@ class ModelStorage(Model):
                 nbrmax = max(nbrmax, max2)
                 reduce(lambda x, y: x and y, newrow)
                 row[field] = (reduce(lambda x, y: x or y, newrow.values()) and
-                         [('create', newrow)]) or []
+                         [('create', [newrow])]) or []
                 i = max2
                 while (position + i) < len(data):
                     test = True
                     for j, field2 in enumerate(fields_names):
-                        if len(field2) <= (prefix_len + 1) \
-                               and data[position + i][j]:
+                        if (len(field2) <= (prefix_len + 1)
+                                and data[position + i][j]):
                             test = False
                             break
                     if not test:
                         break
                     (newrow, max2, _) = \
-                            process_lines(data, prefix + [field], newfd,
-                                    position + i)
+                        process_lines(data, prefix + [field], newfd,
+                            position + i)
                     if reduce(lambda x, y: x or y, newrow.values()):
-                        row[field].append(('create', newrow))
+                        row[field].append(('create', [newrow]))
                     i += max2
                     nbrmax = max(nbrmax, i)
             if prefix_len == 0:
@@ -732,9 +732,9 @@ class ModelStorage(Model):
         ModelData = pool.get('ir.model.data')
 
         # logger for collecting warnings for the client
-        warnings = logging.Logger("import")
+        logger = logging.Logger("import")
         warning_stream = StringIO.StringIO()
-        warnings.addHandler(logging.StreamHandler(warning_stream))
+        logger.addHandler(logging.StreamHandler(warning_stream))
 
         len_fields_names = len(fields_names)
         assert all(len(x) == len_fields_names for x in data)
@@ -747,13 +747,13 @@ class ModelStorage(Model):
             res = {}
             try:
                 (res, _, translate) = \
-                        process_lines(data, [], fields_def)
+                    process_lines(data, [], fields_def)
                 warning = warning_stream.getvalue()
                 if warning:
                     # XXX should raise Exception
                     Transaction().cursor.rollback()
                     return (-1, res, warning, '')
-                new_id = cls.create(res)
+                new_id, = cls.create([res])
                 for lang in translate:
                     with Transaction().set_context(language=lang):
                         cls.write(new_id, translate[lang])
@@ -785,18 +785,18 @@ class ModelStorage(Model):
         if Transaction().user == 0:
             return True
         with Transaction().set_user(0):
-            model_data_ids = ModelData.search([
+            models_data = ModelData.search([
                 ('model', '=', cls.__name__),
                 ('db_id', 'in', map(int, records)),
                 ])
-            if not model_data_ids:
+            if not models_data:
                 return True
-            if values == None:
+            if values is None:
                 return False
-            for line in ModelData.browse(model_data_ids):
-                if not line.values:
+            for model_data in models_data:
+                if not model_data.values:
                     continue
-                xml_values = safe_eval(line.values, {
+                xml_values = safe_eval(model_data.values, {
                     'Decimal': Decimal,
                     'datetime': datetime,
                     })
@@ -806,23 +806,17 @@ class ModelStorage(Model):
         return True
 
     @classmethod
-    def check_recursion(cls, records, parent='parent'):
+    def check_recursion(cls, records, parent='parent', rec_name='rec_name'):
         '''
         Function that checks if there is no recursion in the tree
         composed with parent as parent field name.
         '''
-        if parent in cls._fields:
-            parent_type = cls._fields[parent]._type
-        elif parent in cls._inherit_fields:
-            parent_type = cls._inherit_fields[parent][2]._type
-        else:
-            raise Exception('Field %s not available on object "%s"' % \
-                    (parent, cls.__name__))
+        parent_type = cls._fields[parent]._type
 
-        if parent_type not in ('many2one', 'many2many'):
+        if parent_type not in ('many2one', 'many2many', 'one2one'):
             raise Exception(
-                    'Unsupported field type "%s" for field "%s" on "%s"' % \
-                    (parent_type, parent, cls.__name__))
+                'Unsupported field type "%s" for field "%s" on "%s"'
+                % (parent_type, parent, cls.__name__))
 
         visited = set()
 
@@ -834,24 +828,34 @@ class ModelStorage(Model):
                     for walk in walker:
                         walked.add(walk.id)
                         if walk.id == record.id:
-                            return False
+                            parent_rec_name = ', '.join(getattr(r, rec_name)
+                                for r in getattr(record, parent))
+                            cls.raise_user_error('recursion_error', {
+                                    'rec_name': getattr(record, rec_name),
+                                    'parent_rec_name': parent_rec_name,
+                                    })
                     walker = list(chain(*(getattr(walk, parent)
                                 for walk in walker if walk.id not in visited)))
                 else:
                     walked.add(walker.id)
                     if walker.id == record.id:
-                        return False
+                        cls.raise_user_error('recursion_error', {
+                                'rec_name': getattr(record, rec_name),
+                                'parent_rec_name': getattr(getattr(record,
+                                        parent), rec_name)
+                                })
                     walker = (getattr(walker, parent) not in visited
                         and getattr(walker, parent))
             visited.update(walked)
-
-        return True
 
     @classmethod
     def _get_error_args(cls, field_name):
         pool = Pool()
         ModelField = pool.get('ir.model.field')
-        error_args = (field_name, cls.__name__)
+        error_args = {
+            'field': field_name,
+            'model': cls.__name__
+            }
         if ModelField:
             model_fields = ModelField.search([
                         ('name', '=', field_name),
@@ -859,20 +863,22 @@ class ModelStorage(Model):
                         ], limit=1)
             if model_fields:
                 model_field, = model_fields
-                error_args = (model_field.field_description,
-                        model_field.model.name)
+                error_args.update({
+                        'field': model_field.field_description,
+                        'model': model_field.model.name,
+                        })
         return error_args
 
     @classmethod
-    def _validate(cls, records):
-        pool = Pool()
-        if (Transaction().user == 0
-                and Transaction().context.get('user')):
-            with Transaction().set_user(Transaction().context.get('user')):
-                return cls._validate(cls.browse(records))
+    def validate(cls, records):
+        pass
 
-        for record in records:
-            record.pre_validate()
+    @classmethod
+    def _validate(cls, records, field_names=None):
+        pool = Pool()
+        # Ensure that records are readable
+        with Transaction().set_user(0, set_context=True):
+            records = cls.browse(records)
 
         def call(name):
             method = getattr(cls, name)
@@ -881,6 +887,9 @@ class ModelStorage(Model):
             else:
                 return all(method(r) for r in records)
         for field in cls._constraints:
+            warnings.warn(
+                '_constraints is deprecated, override validate instead',
+                DeprecationWarning, stacklevel=2)
             if not call(field[0]):
                 cls.raise_user_error(field[1])
 
@@ -902,21 +911,30 @@ class ModelStorage(Model):
                     if isinstance(i, (list, tuple)):
                         if is_pyson(i):
                             return True
+            if isinstance(test, dict):
+                for key, value in test.items():
+                    if isinstance(value, PYSON):
+                        return True
+                    if isinstance(value, (list, tuple, dict)):
+                        if is_pyson(value):
+                            return True
             return False
 
+        field_names = set(field_names or [])
+        ctx_pref['active_test'] = False
         with Transaction().set_context(ctx_pref):
-            # Ensure that records are readable
-            with Transaction().set_user(0, set_context=True):
-                records = cls.browse(records)
-
             for field_name, field in cls._fields.iteritems():
+                if (field_names
+                        and field_name not in field_names
+                        and not (set(field.depends) & field_names)):
+                    continue
                 if isinstance(field, fields.Function) and \
                         not field.setter:
                     continue
                 # validate domain
                 if (field._type in
                         ('many2one', 'many2many', 'one2many', 'one2one')
-                    and field.domain):
+                        and field.domain):
                     if field._type in ('many2one', 'one2many'):
                         Relation = pool.get(field.model_name)
                     else:
@@ -975,7 +993,7 @@ class ModelStorage(Model):
 
                 def required_test(value, field_name):
                     if (isinstance(value, (type(None), type(False), list,
-                                    tuple, basestring))
+                                    tuple, basestring, dict))
                             and not value):
                         cls.raise_user_error('required_validation_record',
                             error_args=cls._get_error_args(field_name))
@@ -1018,16 +1036,19 @@ class ModelStorage(Model):
                             field_size = PYSONDecoder(env).decode(pyson_size)
                         else:
                             field_size = field.size
-                        if (len(getattr(record, field_name) or '')
-                                > field_size >= 0):
-                            cls.raise_user_error(
-                                'size_validation_record',
-                                error_args=cls._get_error_args(field_name))
+                        size = len(getattr(record, field_name) or '')
+                        if (size > field_size >= 0):
+                            error_args = cls._get_error_args(field_name)
+                            error_args['size'] = size
+                            cls.raise_user_error('size_validation_record',
+                                error_args=error_args)
 
                 def digits_test(value, digits, field_name):
                     def raise_user_error():
+                        error_args = cls._get_error_args(field_name)
+                        error_args['digits'] = digits[1]
                         cls.raise_user_error('digits_validation_record',
-                            error_args=cls._get_error_args(field_name))
+                            error_args=error_args)
                     if value is None:
                         return
                     if isinstance(value, Decimal):
@@ -1056,6 +1077,34 @@ class ModelStorage(Model):
                             digits_test(getattr(record, field_name),
                                 field.digits, field_name)
 
+                # validate selection
+                if hasattr(field, 'selection') and field.selection:
+                    if isinstance(field.selection, (tuple, list)):
+                        test = set(dict(field.selection).keys())
+                    for record in records:
+                        value = getattr(record, field_name)
+                        if field._type == 'reference':
+                            if isinstance(value, ModelStorage):
+                                value = value.__class__.__name__
+                            elif value:
+                                value, _ = value.split(',')
+                        if not isinstance(field.selection, (tuple, list)):
+                            sel_func = getattr(cls, field.selection)
+                            if field.selection_change_with:
+                                test = sel_func(record)
+                            else:
+                                test = sel_func()
+                            test = set(dict(test))
+                        # None and '' are equivalent
+                        if '' in test or None in test:
+                            test.add('')
+                            test.add(None)
+                        if value not in test:
+                            error_args = cls._get_error_args(field_name)
+                            error_args['value'] = value
+                            cls.raise_user_error('selection_validation_record',
+                                error_args=error_args)
+
                 def format_test(value, format, field_name):
                     if not value:
                         return
@@ -1063,8 +1112,10 @@ class ModelStorage(Model):
                         value = value.time()
                     if value != datetime.datetime.strptime(
                             value.strftime(format), format).time():
+                        error_args = cls._get_error_args(field_name)
+                        error_args['value'] = value
                         cls.raise_user_error('time_format_validation_record',
-                            error_args=cls._get_error_args(field_name))
+                            error_args=error_args)
 
                 # validate time format
                 if (field._type in ('datetime', 'time')
@@ -1086,13 +1137,17 @@ class ModelStorage(Model):
                             format_test(getattr(record, field_name),
                                 field.format, field_name)
 
+        for record in records:
+            record.pre_validate()
+
+        cls.validate(records)
+
     @classmethod
     def _clean_defaults(cls, defaults):
         pool = Pool()
         vals = {}
         for field in defaults.keys():
-            fld_def = (field in cls._fields) and cls._fields[field] \
-                    or cls._inherit_fields[field][2]
+            fld_def = cls._fields[field]
             if fld_def._type in ('many2one', 'one2one'):
                 if isinstance(defaults[field], (list, tuple)):
                     vals[field] = defaults[field][0]
@@ -1103,9 +1158,9 @@ class ModelStorage(Model):
                 vals[field] = []
                 for defaults2 in defaults[field]:
                     vals2 = obj._clean_defaults(defaults2)
-                    vals[field].append(('create', vals2))
+                    vals[field].append(('create', [vals2]))
             elif fld_def._type in ('many2many',):
-                vals[field] = [('set', defaults[field])]
+                vals[field] = [('add', defaults[field])]
             elif fld_def._type in ('boolean',):
                 vals[field] = bool(defaults[field])
             else:
@@ -1115,15 +1170,16 @@ class ModelStorage(Model):
     def __init__(self, id=None, **kwargs):
         _ids = kwargs.pop('_ids', None)
         _local_cache = kwargs.pop('_local_cache', None)
-        super(ModelStorage, self).__init__(id, **kwargs)
         self._cursor = Transaction().cursor
         self._user = Transaction().user
         self._context = Transaction().context
+        if id is not None:
+            id = int(id)
         if _ids is not None:
             self._ids = _ids
             assert id in _ids
         else:
-            self._ids = [self.id]
+            self._ids = [id]
 
         self._cursor_cache = self._cursor.get_cache(self._context)
 
@@ -1132,6 +1188,8 @@ class ModelStorage(Model):
         else:
             self._local_cache = LRUDict(RECORD_CACHE_SIZE)
         self._local_cache.counter = Transaction().counter
+
+        super(ModelStorage, self).__init__(id, **kwargs)
 
     @property
     def _cache(self):
@@ -1151,23 +1209,22 @@ class ModelStorage(Model):
         if self._local_cache.counter != counter:
             self._local_cache.clear()
             self._local_cache.counter = counter
+
+        # fetch the definition of the field
+        try:
+            field = self._fields[name]
+        except KeyError:
+            raise AttributeError('"%s" has no attribute "%s"' % (self, name))
+
         try:
             return self._local_cache[self.id][name]
         except KeyError:
             pass
         try:
-            return self._cache[self.id][name]
+            if field._type not in ('many2one', 'reference'):
+                return self._cache[self.id][name]
         except KeyError:
             pass
-
-        # fetch the definition of the field
-        if name in self._fields:
-            field = self._fields[name]
-        elif name in self._inherit_fields:
-            field = self._inherit_fields[name][2]
-        else:
-            raise AttributeError("'%s' Model has no attribute '%s'"
-                % (self.__name__, name))
 
         # build the list of fields we will fetch
         ffields = {
@@ -1176,17 +1233,12 @@ class ModelStorage(Model):
         if field.loading == 'eager':
             FieldAccess = Pool().get('ir.model.field.access')
             fread_accesses = {}
-            for inherit_name in self._inherits:
-                Inherit = Pool().get(inherit_name)
-                fread_accesses.update(FieldAccess.check(inherit_name,
-                    Inherit._fields.keys(), 'read', access=True))
             fread_accesses.update(FieldAccess.check(self.__name__,
                 self._fields.keys(), 'read', access=True))
             to_remove = set(x for x, y in fread_accesses.iteritems()
                     if not y and x != name)
 
             threshold = BROWSE_FIELD_TRESHOLD
-            inherit_threshold = threshold - len(self._fields)
 
             def not_cached(item):
                 fname, field = item
@@ -1202,17 +1254,6 @@ class ModelStorage(Model):
                 fname, field = item
                 return fname in self._fields
 
-            if inherit_threshold > 0:
-                ifields = ((fname, field)
-                    for fname, (_, _, field) in
-                    self._inherit_fields.iteritems())
-                ifields = ifilterfalse(overrided,
-                    ifilter(to_load,
-                        ifilter(not_cached, ifields)))
-                ifields = islice(ifields, 0, inherit_threshold)
-                ffields.update(ifields)
-                threshold -= inherit_threshold
-
             ifields = ifilter(to_load,
                 ifilter(not_cached,
                     self._fields.iteritems()))
@@ -1222,26 +1263,23 @@ class ModelStorage(Model):
         # add datetime_field
         for field in ffields.values():
             if hasattr(field, 'datetime_field') and field.datetime_field:
-                if field.datetime_field in self._fields:
-                    datetime_field = self._fields[field.datetime_field]
-                else:
-                    datetime_field = self._inherit_fields[
-                            field.datetime_field][2]
+                datetime_field = self._fields[field.datetime_field]
                 ffields[field.datetime_field] = datetime_field
 
         def filter_(id_):
-            try:
-                if name in self._local_cache[id_]:
-                    return False
-                if name in self._cache[id_]:
-                    return False
-            except KeyError:
-                pass
-            return True
+            return (name not in self._cache.get(id_, {})
+                and name not in self._local_cache.get(id_, {}))
+
+        def unique(ids):
+            s = set()
+            for id_ in ids:
+                if id_ not in s:
+                    s.add(id_)
+                    yield id_
         index = self._ids.index(self.id)
         ids = chain(islice(self._ids, index, None),
             islice(self._ids, 0, max(index - 1, 0)))
-        ids = list(islice(ifilter(filter_, ids), self._cursor.IN_MAX))
+        ids = islice(unique(ifilter(filter_, ids)), self._cursor.IN_MAX)
 
         def instantiate(field, value, data):
             if field._type in ('many2one', 'one2one', 'reference'):
@@ -1262,10 +1300,12 @@ class ModelStorage(Model):
                     Model = field.get_target()
             except KeyError:
                 return value
+            ctx = {}
             datetime_ = None
             if getattr(field, 'datetime_field', None):
                 datetime_ = data.get(field.datetime_field)
-            with Transaction().set_context(_datetime=datetime_):
+                ctx = {'_datetime': datetime_}
+            with Transaction().set_context(**ctx):
                 local_cache = model2cache.setdefault((Model, datetime_),
                     LRUDict(RECORD_CACHE_SIZE))
                 ids = model2ids.setdefault((Model, datetime_), [])
@@ -1280,28 +1320,43 @@ class ModelStorage(Model):
         model2ids = {}
         model2cache = {}
         # Read the data
-        with contextlib.nested(Transaction().set_cursor(self._cursor),
-                Transaction().set_user(self._user),
-                Transaction().set_context(self._context)):
+        with Transaction().set_cursor(self._cursor), \
+                Transaction().set_user(self._user), \
+                Transaction().set_context(self._context):
+            if self.id in self._cache and name in self._cache[self.id]:
+                # Use values from cache
+                ids = islice(chain(islice(self._ids, index, None),
+                        islice(self._ids, 0, max(index - 1, 0))),
+                    self._cursor.IN_MAX)
+                ffields = {name: ffields[name]}
+                read_data = [{'id': i, name: self._cache[i][name]}
+                    for i in ids
+                    if i in self._cache and name in self._cache[i]]
+            else:
+                read_data = self.read(list(ids), ffields.keys())
             # create browse records for 'remote' models
-            for data in self.read(ids, ffields.keys()):
+            for data in read_data:
                 for fname, field in ffields.iteritems():
+                    fvalue = data[fname]
                     if field._type in ('many2one', 'one2one', 'one2many',
                             'many2many', 'reference'):
-                        data[fname] = instantiate(field, data[fname], data)
-                    elif not isinstance(field, fields.Function):
-                        continue
+                        fvalue = instantiate(field, data[fname], data)
                     if data['id'] == self.id and fname == name:
-                        value = data[fname]
+                        value = fvalue
+                    if (field._type not in ('many2one', 'one2one', 'one2many',
+                                'many2many', 'reference')
+                            and not isinstance(field, fields.Function)):
+                        continue
                     if data['id'] not in self._local_cache:
                         self._local_cache[data['id']] = {}
-                    self._local_cache[data['id']][fname] = data[fname]
-                    del data[fname]
+                    self._local_cache[data['id']][fname] = fvalue
+                    if (field._type not in ('many2one', 'reference')
+                            or getattr(field, 'datetime_field', None)
+                            or isinstance(field, fields.Function)):
+                        del data[fname]
                 if data['id'] not in self._cache:
                     self._cache[data['id']] = {}
                 self._cache[data['id']].update(data)
-                if data['id'] == self.id and name in data:
-                    value = data[name]
         return value
 
     @property
@@ -1310,10 +1365,7 @@ class ModelStorage(Model):
         if not self._values:
             return values
         for fname, value in self._values.iteritems():
-            if fname in self._fields:
-                field = self._fields[fname]
-            else:
-                field = self._inherit_fields[fname][2]
+            field = self._fields[fname]
             if field._type in ('many2one', 'one2one', 'reference'):
                 if value:
                     if value.id < 0 and field._type != 'reference':
@@ -1324,34 +1376,64 @@ class ModelStorage(Model):
                         value = value.id
             if field._type in ('one2many', 'many2many'):
                 targets = value
-                value = [
-                    ('set', []),
-                    ]
+                if self.id >= 0:
+                    _values, self._values = self._values, None
+                    try:
+                        to_remove = [t.id for t in getattr(self, fname)]
+                    finally:
+                        self._values = _values
+                else:
+                    to_remove = []
+                to_add = []
+                to_create = []
+                to_write = []
                 for target in targets:
                     if target.id < 0:
-                        value.append(('create', target._save_values))
-                    elif target._save_values:
-                        value.append(
-                            ('write', [target.id], target._save_values))
+                        if field._type == 'one2many':
+                            # Don't store old target link
+                            setattr(target, field.field, None)
+                        to_create.append(target._save_values)
                     else:
-                        value[0][1].append(target.id)
+                        if target.id in to_remove:
+                            to_remove.remove(target.id)
+                        else:
+                            to_add.append(target.id)
+                            target_values = target._save_values
+                            if target_values:
+                                to_write.append(
+                                    ('write', [target.id], target_values))
+                value = []
+                if to_remove:
+                    value.append(('remove', to_remove))
+                if to_add:
+                    value.append(('add', to_add))
+                if to_create:
+                    value.append(('create', to_create))
+                if to_write:
+                    value.extend(to_write)
             values[fname] = value
         return values
 
     def save(self):
-        if self._save_values or self.id < 0:
-            with contextlib.nested(Transaction().set_cursor(self._cursor),
-                    Transaction().set_user(self._user),
-                    Transaction().set_context(self._context)):
-                if self.id < 0:
-                    self._ids.remove(self.id)
-                    try:
-                        self.id = self.create(self._save_values).id
-                    finally:
-                        self._ids.append(self.id)
-                else:
-                    self.write([self], self._save_values)
+        save_values = self._save_values
+        values = self._values
         self._values = None
+        if save_values or self.id < 0:
+            try:
+                with Transaction().set_cursor(self._cursor), \
+                        Transaction().set_user(self._user), \
+                        Transaction().set_context(self._context):
+                    if self.id < 0:
+                        self._ids.remove(self.id)
+                        try:
+                            self.id = self.create([save_values])[0].id
+                        finally:
+                            self._ids.append(self.id)
+                    else:
+                        self.write([self], save_values)
+            except:
+                self._values = values
+                raise
 
 
 class EvalEnvironment(dict):
@@ -1364,14 +1446,10 @@ class EvalEnvironment(dict):
     def __getitem__(self, item):
         if item.startswith('_parent_'):
             field = item[8:]
-            if field in self._model._fields:
-                model_name = self._model._fields[field].model_name
-            else:
-                model_name = self._model._inherit_fields[field][2].model_name
+            model_name = self._model._fields[field].model_name
             ParentModel = Pool().get(model_name)
             return EvalEnvironment(getattr(self._record, field), ParentModel)
-        if (item in self._model._fields
-                or item in self._model._inherit_fields):
+        if item in self._model._fields:
             value = getattr(self._record, item)
             if isinstance(value, Model):
                 if self._model._fields[item]._type == 'reference':

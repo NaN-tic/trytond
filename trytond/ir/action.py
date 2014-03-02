@@ -4,10 +4,14 @@ import base64
 import os
 from operator import itemgetter
 from collections import defaultdict
+from functools import partial
 
-from ..model import ModelView, ModelSQL, fields
+from sql import Table
+from sql.aggregate import Count
+
+from ..model import ModelView, ModelStorage, ModelSQL, fields
 from ..tools import file_open, safe_eval
-from ..backend import TableHandler
+from .. import backend
 from ..pyson import PYSONEncoder, CONTEXT, PYSON
 from ..transaction import Transaction
 from ..pool import Pool
@@ -15,8 +19,9 @@ from ..cache import Cache
 from ..rpc import RPC
 
 __all__ = [
-    'Action', 'ActionKeyword', 'ActionReport', 'ActionActWindow',
-    'ActionActWindowView', 'ActionWizard', 'ActionURL',
+    'Action', 'ActionKeyword', 'ActionReport',
+    'ActionActWindow', 'ActionActWindowView', 'ActionActWindowDomain',
+    'ActionWizard', 'ActionURL',
     ]
 
 EMAIL_REFKEYS = set(('cc', 'to', 'subject'))
@@ -51,12 +56,18 @@ class Action(ModelSQL, ModelView):
         return True
 
     @classmethod
+    def write(cls, actions, values, *args):
+        pool = Pool()
+        super(Action, cls).write(actions, values, *args)
+        pool.get('ir.action.keyword')._get_keyword_cache.clear()
+
+    @classmethod
     def get_action_id(cls, action_id):
         pool = Pool()
         with Transaction().set_context(active_test=False):
             if cls.search([
-                ('id', '=', action_id),
-                ]):
+                        ('id', '=', action_id),
+                        ]):
                 return action_id
             for action_type in (
                     'ir.action.report',
@@ -75,7 +86,7 @@ class Action(ModelSQL, ModelView):
     @classmethod
     def get_action_values(cls, type_, action_ids):
         Action = Pool().get(type_)
-        columns = set(Action._fields.keys() + Action._inherit_fields.keys())
+        columns = set(Action._fields.keys())
         columns.add('icon.rec_name')
         to_remove = ()
         if type_ == 'ir.action.report':
@@ -109,15 +120,14 @@ class ActionKeyword(ModelSQL, ModelView):
     def __setup__(cls):
         super(ActionKeyword, cls).__setup__()
         cls.__rpc__.update({'get_keyword': RPC()})
-        cls._constraints += [
-            ('check_wizard_model', 'wrong_wizard_model'),
-        ]
         cls._error_messages.update({
-            'wrong_wizard_model': 'Wrong wizard model!',
-        })
+                'wrong_wizard_model': ('Wrong wizard model in keyword action '
+                    '"%s".'),
+                })
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         super(ActionKeyword, cls).__register__(module_name)
 
         table = TableHandler(Transaction().cursor, cls, module_name)
@@ -130,6 +140,12 @@ class ActionKeyword(ModelSQL, ModelView):
     def search_groups(cls, name, clause):
         return [('action.groups',) + tuple(clause[1:])]
 
+    @classmethod
+    def validate(cls, actions):
+        super(ActionKeyword, cls).validate(actions)
+        for action in actions:
+            action.check_wizard_model()
+
     def check_wizard_model(self):
         ActionWizard = Pool().get('ir.action.wizard')
         if self.action.type == 'ir.action.wizard':
@@ -138,8 +154,8 @@ class ActionKeyword(ModelSQL, ModelView):
                 ], limit=1)
             if action_wizard.model:
                 if self.model.__name__ != action_wizard.model:
-                    return False
-        return True
+                    self.raise_user_error('wrong_wizard_model', (
+                            action_wizard.rec_name,))
 
     @staticmethod
     def _convert_vals(vals):
@@ -168,17 +184,22 @@ class ActionKeyword(ModelSQL, ModelView):
         super(ActionKeyword, cls).delete(keywords)
 
     @classmethod
-    def create(cls, vals):
+    def create(cls, vlist):
         ModelView._fields_view_get_cache.clear()
         ModelView._view_toolbar_get_cache.clear()
         cls._get_keyword_cache.clear()
-        vals = cls._convert_vals(vals)
-        return super(ActionKeyword, cls).create(vals)
+        new_vlist = []
+        for vals in vlist:
+            new_vlist.append(cls._convert_vals(vals))
+        return super(ActionKeyword, cls).create(new_vlist)
 
     @classmethod
-    def write(cls, keywords, vals):
-        vals = cls._convert_vals(vals)
-        super(ActionKeyword, cls).write(keywords, vals)
+    def write(cls, keywords, values, *args):
+        actions = iter((keywords, values) + args)
+        args = []
+        for keywords, values in zip(actions, actions):
+            args.extend((keywords, cls._convert_vals(values)))
+        super(ActionKeyword, cls).write(*args)
         ModelView._fields_view_get_cache.clear()
         ModelView._view_toolbar_get_cache.clear()
         cls._get_keyword_cache.clear()
@@ -205,6 +226,7 @@ class ActionKeyword(ModelSQL, ModelView):
                     ('model', '=', model + ',' + str(model_id)),
                     ],
                 ]
+        clause = [clause, ('action.active', '=', True)]
         action_keywords = cls.search(clause, order=[])
         types = defaultdict(list)
         for action_keyword in action_keywords:
@@ -217,16 +239,141 @@ class ActionKeyword(ModelSQL, ModelView):
         return keywords
 
 
-class ActionReport(ModelSQL, ModelView):
+class ActionMixin(ModelSQL):
+    _order_name = 'action'
+
+    @classmethod
+    def __setup__(cls):
+        super(ActionMixin, cls).__setup__()
+        for name in dir(Action):
+            field = getattr(Action, name)
+            if (isinstance(field, fields.Field)
+                    and not getattr(cls, name, None)):
+                setattr(cls, name, fields.Function(field, 'get_action',
+                        setter='set_action', searcher='search_action'))
+                default_func = 'default_' + name
+                if getattr(Action, default_func, None):
+                    setattr(cls, default_func,
+                        partial(ActionMixin.default_action, name))
+
+    @staticmethod
+    def default_action(name):
+        pool = Pool()
+        Action = pool.get('ir.action')
+        return getattr(Action, 'default_' + name, None)()
+
+    @classmethod
+    def get_action(cls, ids, names):
+        records = cls.browse(ids)
+        result = {}
+        for name in names:
+            result[name] = values = {}
+            for record in records:
+                value = getattr(record, 'action')
+                convert = lambda v: v
+                if value is not None:
+                    value = getattr(value, name)
+                    if isinstance(value, ModelStorage):
+                        if cls._fields[name]._type == 'reference':
+                            convert = str
+                        else:
+                            convert = int
+                    elif isinstance(value, (list, tuple)):
+                        convert = lambda v: [r.id for r in v]
+                values[record.id] = convert(value)
+        return result
+
+    @classmethod
+    def set_action(cls, records, name, value):
+        pool = Pool()
+        Action = pool.get('ir.action')
+        Action.write([r.action for r in records], {
+                name: value,
+                })
+
+    @classmethod
+    def search_action(cls, name, clause):
+        return [('action.' + name,) + tuple(clause[1:])]
+
+    @classmethod
+    def create(cls, vlist):
+        pool = Pool()
+        Action = pool.get('ir.action')
+        ir_action = cls.__table__()
+        new_records = []
+        for values in vlist:
+            later = {}
+            action_values = {}
+            values = values.copy()
+            for field in values:
+                if field in Action._fields:
+                    action_values[field] = values[field]
+                if hasattr(getattr(cls, field), 'set'):
+                    later[field] = values[field]
+            for field in later:
+                del values[field]
+            action_values['type'] = cls.default_type()
+            cursor = Transaction().cursor
+            if cursor.nextid(cls._table):
+                cursor.setnextid(cls._table, cursor.currid(Action._table))
+            if 'action' not in values:
+                action, = Action.create([action_values])
+                values['action'] = action.id
+            else:
+                action = Action(values['action'])
+            record, = super(ActionMixin, cls).create([values])
+            cursor.execute(*ir_action.update(
+                    [ir_action.id], [action.id],
+                    where=ir_action.id == record.id))
+            cursor.update_auto_increment(cls._table, action.id)
+            record = cls(action.id)
+            new_records.append(record)
+            cls.write([record], later)
+        return new_records
+
+    @classmethod
+    def write(cls, records, values, *args):
+        pool = Pool()
+        ActionKeyword = pool.get('ir.action.keyword')
+        super(ActionMixin, cls).write(records, values, *args)
+        ActionKeyword._get_keyword_cache.clear()
+
+    @classmethod
+    def delete(cls, records):
+        pool = Pool()
+        Action = pool.get('ir.action')
+        actions = [x.action for x in records]
+        super(ActionMixin, cls).delete(records)
+        Action.delete(actions)
+
+    @classmethod
+    def copy(cls, records, default=None):
+        pool = Pool()
+        Action = pool.get('ir.action')
+        if default is None:
+            default = {}
+        default = default.copy()
+        new_records = []
+        for record in records:
+            default['action'] = Action.copy([record.action])[0].id
+            new_records.extend(super(ActionMixin, cls).copy([record],
+                    default=default))
+        return new_records
+
+
+class ActionReport(ActionMixin, ModelSQL, ModelView):
     "Action report"
     __name__ = 'ir.action.report'
-    _inherits = {'ir.action': 'action'}
     model = fields.Char('Model')
     report_name = fields.Char('Internal Name', required=True)
     report = fields.Char('Path')
     report_content_custom = fields.Binary('Content')
-    report_content = fields.Function(fields.Binary('Content'),
-            'get_report_content', setter='set_report_content')
+    report_content = fields.Function(fields.Binary('Content',
+            filename='report_content_name'),
+        'get_report_content', setter='set_report_content')
+    report_content_name = fields.Function(fields.Char('Content Name',
+            on_change_with=['name', 'template_extension']),
+        'on_change_with_report_content_name')
     action = fields.Many2One('ir.action', 'Action', required=True,
             ondelete='CASCADE')
     style = fields.Property(fields.Char('Style',
@@ -318,30 +465,30 @@ class ActionReport(ModelSQL, ModelView):
             ('report_name_module_uniq', 'UNIQUE(report_name, module)',
                 'The internal name must be unique by module!'),
         ]
-        cls._constraints += [
-            ('check_email', 'invalid_email'),
-            ]
         cls._error_messages.update({
-                'invalid_email': 'Invalid email!',
+                'invalid_email': 'Invalid email definition on report "%s".',
                 })
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         super(ActionReport, cls).__register__(module_name)
 
         cursor = Transaction().cursor
         table = TableHandler(cursor, cls, module_name)
+        action_report = cls.__table__()
 
         # Migration from 1.0 report_name_uniq has been removed
         table.drop_constraint('report_name_uniq')
 
         # Migration from 1.0 output_format (m2o) is now extension (selection)
         if table.column_exist('output_format'):
-            cursor.execute(
-                'SELECT report.id FROM "' + cls._table + '" report '
-                'JOIN ir_action_report_outputformat of '
-                    'ON (report.output_format = of.id) '
-                'WHERE of.format = \'pdf\'')
+            outputformat = Table('ir_action_report_outputformat')
+            cursor.execute(*action_report.join(
+                    outputformat,
+                    condition=action_report.output_format == outputformat.id)
+                .select(action_report.id,
+                    where=outputformat.format == 'pdf'))
 
             ids = [x[0] for x in cursor.fetchall()]
             with Transaction().set_user(0):
@@ -351,34 +498,35 @@ class ActionReport(ModelSQL, ModelView):
 
             table.drop_column("output_format")
             TableHandler.dropTable(cursor, 'ir.action.report.outputformat',
-                      'ir_action_report_outputformat')
+                'ir_action_report_outputformat')
 
         # Migrate from 2.0 remove required on extension
         table.not_null_action('extension', action='remove')
-        cursor.execute('UPDATE "' + cls._table + '" '
-            'SET extension = %s '
-            'WHERE extension = %s', ('', 'odt'))
+        cursor.execute(*action_report.update(
+                [action_report.extension],
+                [''],
+                where=action_report.extension == 'odt'))
 
         # Migration from 2.0 report_content_data renamed into
         # report_content_custom to remove base64 encoding
         if (table.column_exist('report_content_data')
                 and table.column_exist('report_content_custom')):
             limit = cursor.IN_MAX
-            cursor.execute('SELECT COUNT(id) '
-                'FROM "' + cls._table + '"')
+            cursor.execute(*action_report.select(
+                    Count(action_report.id)))
             report_count, = cursor.fetchone()
             for offset in range(0, report_count, limit):
-                cursor.execute(cursor.limit_clause(
-                    'SELECT id, report_content_data '
-                    'FROM "' + cls._table + '"'
-                    'ORDER BY id',
-                    limit, offset))
+                cursor.execute(*action_report.select(
+                        action_report.id, action_report.report_content_data,
+                        order_by=action_report.id,
+                        limit=limit, offset=offset))
                 for report_id, report in cursor.fetchall():
                     if report:
                         report = buffer(base64.decodestring(str(report)))
-                        cursor.execute('UPDATE "' + cls._table + '" '
-                            'SET report_content_custom = %s '
-                            'WHERE id = %s', (report, report_id))
+                        cursor.execute(*action_report.update(
+                                [action_report.report_content_custom],
+                                [report],
+                                where=action_report.id == report_id))
             table.drop_column('report_content_data')
 
     @staticmethod
@@ -406,6 +554,11 @@ class ActionReport(ModelSQL, ModelView):
         return Transaction().context.get('module') or ''
 
     @classmethod
+    def validate(cls, reports):
+        super(ActionReport, cls).validate(reports)
+        cls.check_email(reports)
+
+    @classmethod
     def check_email(cls, reports):
         "Check email"
         for report in reports:
@@ -413,14 +566,14 @@ class ActionReport(ModelSQL, ModelView):
                 try:
                     value = safe_eval(report.email, CONTEXT)
                 except Exception:
-                    return False
+                    value = None
                 if isinstance(value, dict):
                     inkeys = set(value)
                     if not inkeys <= EMAIL_REFKEYS:
-                        return False
+                        cls.raise_user_error('invalid_email', (
+                                report.rec_name,))
                 else:
-                    return False
-        return True
+                    cls.raise_user_error('invalid_email', (report.rec_name,))
 
     @classmethod
     def get_report_content(cls, reports, name):
@@ -448,6 +601,11 @@ class ActionReport(ModelSQL, ModelView):
     @classmethod
     def set_report_content(cls, records, name, value):
         cls.write(records, {'%s_custom' % name: value})
+
+    def on_change_with_report_content_name(self, name=None):
+        if not self.name:
+            return
+        return ''.join([self.name, os.extsep, self.template_extension])
 
     @classmethod
     def get_style_content(cls, reports, name):
@@ -484,8 +642,6 @@ class ActionReport(ModelSQL, ModelView):
 
     @classmethod
     def copy(cls, reports, default=None):
-        Action = Pool().get('ir.action')
-
         if default is None:
             default = {}
         default = default.copy()
@@ -496,61 +652,38 @@ class ActionReport(ModelSQL, ModelView):
             if report.report:
                 default['report_content'] = None
             default['report_name'] = report.report_name
-            default['action'] = Action.copy([report.action])[0].id
             new_reports.extend(super(ActionReport, cls).copy([report],
                     default=default))
         return new_reports
 
     @classmethod
-    def create(cls, vals):
-        later = {}
-        vals = vals.copy()
-        for field in vals:
-            if (field in cls._fields
-                    and hasattr(cls._fields[field], 'set')):
-                later[field] = vals[field]
-        for field in later:
-            del vals[field]
-        cursor = Transaction().cursor
-        if cursor.nextid(cls._table):
-            cursor.setnextid(cls._table, cursor.currid('ir_action'))
-        report = super(ActionReport, cls).create(vals)
-        new_id = report.action.id
-        cursor.execute('UPDATE "' + cls._table + '" SET id = %s ' \
-                'WHERE id = %s', (report.action.id, report.id))
-        cursor.update_auto_increment(cls._table, report.action.id)
-        report = cls(new_id)
-        cls.write([report], later)
-        return report
-
-    @classmethod
-    def write(cls, reports, vals):
+    def write(cls, reports, values, *args):
         context = Transaction().context
         if 'module' in context:
-            vals = vals.copy()
-            vals['module'] = context['module']
-
-        super(ActionReport, cls).write(reports, vals)
-
-    @classmethod
-    def delete(cls, reports):
-        Action = Pool().get('ir.action')
-
-        actions = [x.action for x in reports]
-        super(ActionReport, cls).delete(reports)
-        Action.delete(actions)
+            actions = iter((reports, values) + args)
+            args = []
+            for reports, values in zip(actions, actions):
+                values = values.copy()
+                values['module'] = context['module']
+                args.extend((reports, values))
+            reports, values = args[:2]
+            args = args[2:]
+        super(ActionReport, cls).write(reports, values, *args)
 
 
-class ActionActWindow(ModelSQL, ModelView):
+class ActionActWindow(ActionMixin, ModelSQL, ModelView):
     "Action act window"
     __name__ = 'ir.action.act_window'
-    _inherits = {'ir.action': 'action'}
     domain = fields.Char('Domain Value')
     context = fields.Char('Context Value')
+    order = fields.Char('Order Value')
     res_model = fields.Char('Model')
     act_window_views = fields.One2Many('ir.action.act_window.view',
             'act_window', 'Views')
     views = fields.Function(fields.Binary('Views'), 'get_views')
+    act_window_domains = fields.One2Many('ir.action.act_window.domain',
+        'act_window', 'Domains')
+    domains = fields.Function(fields.Binary('Domains'), 'get_domains')
     limit = fields.Integer('Limit', required=True,
             help='Default limit for the list view')
     auto_refresh = fields.Integer('Auto-Refresh', required=True,
@@ -564,22 +697,21 @@ class ActionActWindow(ModelSQL, ModelView):
     pyson_domain = fields.Function(fields.Char('PySON Domain'), 'get_pyson')
     pyson_context = fields.Function(fields.Char('PySON Context'),
             'get_pyson')
+    pyson_order = fields.Function(fields.Char('PySON Order'), 'get_pyson')
     pyson_search_value = fields.Function(fields.Char(
         'PySON Search Criteria'), 'get_pyson')
 
     @classmethod
     def __setup__(cls):
         super(ActionActWindow, cls).__setup__()
-        cls._constraints += [
-            ('check_views', 'invalid_views'),
-            ('check_domain', 'invalid_domain'),
-            ('check_context', 'invalid_context'),
-        ]
         cls._error_messages.update({
-            'invalid_views': 'Invalid views!',
-            'invalid_domain': 'Invalid domain or search criteria!',
-            'invalid_context': 'Invalid context!',
-        })
+                'invalid_views': ('Invalid view "%(view)s" for action '
+                    '"%(action)s".'),
+                'invalid_domain': ('Invalid domain or search criteria '
+                    '"%(domain)s" on action "%(action)s".'),
+                'invalid_context': ('Invalid context "%(context)s" on action '
+                    '"%(action)s".'),
+                })
         cls.__rpc__.update({
                 'get': RPC(),
                 })
@@ -587,13 +719,13 @@ class ActionActWindow(ModelSQL, ModelView):
     @classmethod
     def __register__(cls, module_name):
         cursor = Transaction().cursor
+        act_window = cls.__table__()
         super(ActionActWindow, cls).__register__(module_name)
 
         # Migration from 2.0: new search_value format
-        cursor.execute('UPDATE "%s" '
-            'SET search_value = %%s '
-            'WHERE search_value = %%s' % cls._table,
-            ('[]', '{}'))
+        cursor.execute(*act_window.update(
+                [act_window.search_value], ['[]'],
+                where=act_window.search_value == '{}'))
 
     @staticmethod
     def default_type():
@@ -620,6 +752,13 @@ class ActionActWindow(ModelSQL, ModelView):
         return '[]'
 
     @classmethod
+    def validate(cls, actions):
+        super(ActionActWindow, cls).validate(actions)
+        cls.check_views(actions)
+        cls.check_domain(actions)
+        cls.check_context(actions)
+
+    @classmethod
     def check_views(cls, actions):
         "Check views"
         for action in actions:
@@ -627,17 +766,28 @@ class ActionActWindow(ModelSQL, ModelView):
                 for act_window_view in action.act_window_views:
                     view = act_window_view.view
                     if view.model != action.res_model:
-                        return False
+                        cls.raise_user_error('invalid_views', {
+                                'view': view.rec_name,
+                                'action': action.rec_name,
+                                })
                     if view.type == 'board':
-                        return False
+                        cls.raise_user_error('invalid_views', {
+                                'view': view.rec_name,
+                                'action': action.rec_name,
+                                })
             else:
                 for act_window_view in action.act_window_views:
                     view = act_window_view.view
                     if view.model:
-                        return False
+                        cls.raise_user_error('invalid_views', {
+                                'view': view.rec_name,
+                                'action': action.rec_name,
+                                })
                     if view.type != 'board':
-                        return False
-        return True
+                        cls.raise_user_error('invalid_views', {
+                                'view': view.rec_name,
+                                'action': action.rec_name,
+                                })
 
     @classmethod
     def check_domain(cls, actions):
@@ -649,18 +799,29 @@ class ActionActWindow(ModelSQL, ModelView):
                 try:
                     value = safe_eval(domain, CONTEXT)
                 except Exception:
-                    return False
+                    cls.raise_user_error('invalid_domain', {
+                            'domain': domain,
+                            'action': action.rec_name,
+                            })
                 if isinstance(value, PYSON):
                     if not value.types() == set([list]):
-                        return False
+                        cls.raise_user_error('invalid_domain', {
+                                'domain': domain,
+                                'action': action.rec_name,
+                                })
                 elif not isinstance(value, list):
-                    return False
+                    cls.raise_user_error('invalid_domain', {
+                            'domain': domain,
+                            'action': action.rec_name,
+                            })
                 else:
                     try:
                         fields.domain_validate(value)
                     except Exception:
-                        return False
-        return True
+                        cls.raise_user_error('invalid_domain', {
+                                'domain': domain,
+                                'action': action.rec_name,
+                                })
 
     @classmethod
     def check_context(cls, actions):
@@ -670,22 +831,39 @@ class ActionActWindow(ModelSQL, ModelView):
                 try:
                     value = safe_eval(action.context, CONTEXT)
                 except Exception:
-                    return False
+                    cls.raise_user_error('invalid_context', {
+                            'context': action.context,
+                            'action': action.rec_name,
+                            })
                 if isinstance(value, PYSON):
                     if not value.types() == set([dict]):
-                        return False
+                        cls.raise_user_error('invalid_context', {
+                                'context': action.context,
+                                'action': action.rec_name,
+                                })
                 elif not isinstance(value, dict):
-                    return False
+                    cls.raise_user_error('invalid_context', {
+                            'context': action.context,
+                            'action': action.rec_name,
+                            })
                 else:
                     try:
                         fields.context_validate(value)
                     except Exception:
-                        return False
-        return True
+                        cls.raise_user_error('invalid_context', {
+                                'context': action.context,
+                                'action': action.rec_name,
+                                })
 
     def get_views(self, name):
         return [(view.view.id, view.view.type)
             for view in self.act_window_views]
+
+    def get_domains(self, name):
+        encoder = PYSONEncoder()
+        return [(domain.name,
+                encoder.encode(safe_eval(domain.domain or '[]', CONTEXT)))
+            for domain in self.act_window_domains]
 
     @classmethod
     def get_pyson(cls, windows, name):
@@ -703,36 +881,6 @@ class ActionActWindow(ModelSQL, ModelView):
         return pysons
 
     @classmethod
-    def create(cls, vals):
-        later = {}
-        vals = vals.copy()
-        for field in vals:
-            if (field in cls._fields
-                    and hasattr(cls._fields[field], 'set')):
-                later[field] = vals[field]
-        for field in later:
-            del vals[field]
-        cursor = Transaction().cursor
-        if cursor.nextid(cls._table):
-            cursor.setnextid(cls._table, cursor.currid('ir_action'))
-        act_window = super(ActionActWindow, cls).create(vals)
-        new_id = act_window.action.id
-        cursor.execute('UPDATE "' + cls._table + '" SET id = %s ' \
-                'WHERE id = %s', (act_window.action.id, act_window.id))
-        cursor.update_auto_increment(cls._table, act_window.action.id)
-        act_window = cls(new_id)
-        cls.write([act_window], later)
-        return act_window
-
-    @classmethod
-    def delete(cls, act_windows):
-        Action = Pool().get('ir.action')
-
-        actions = [x.action for x in act_windows]
-        super(ActionActWindow, cls).delete(act_windows)
-        Action.delete(actions)
-
-    @classmethod
     def get(cls, xml_id):
         'Get values from XML id or id'
         pool = Pool()
@@ -743,19 +891,6 @@ class ActionActWindow(ModelSQL, ModelView):
         else:
             action_id = int(xml_id)
         return Action.get_action_values(cls.__name__, [action_id])[0]
-
-    @classmethod
-    def copy(cls, actions, default=None):
-        Action = Pool().get('ir.action')
-        if default is None:
-            default = {}
-        default = default.copy()
-        new_actions = []
-        for act_window in actions:
-            default['action'] = Action.copy([act_window.action])[0].id
-            new_actions.extend(super(ActionActWindow, cls).copy([act_window],
-                    default=default))
-        return new_actions
 
 
 class ActionActWindowView(ModelSQL, ModelView):
@@ -775,17 +910,56 @@ class ActionActWindowView(ModelSQL, ModelView):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         super(ActionActWindowView, cls).__register__(module_name)
         table = TableHandler(Transaction().cursor, cls, module_name)
 
         # Migration from 1.0 remove multi
         table.drop_column('multi')
 
+    @classmethod
+    def create(cls, vlist):
+        pool = Pool()
+        windows = super(ActionActWindowView, cls).create(vlist)
+        pool.get('ir.action.keyword')._get_keyword_cache.clear()
+        return windows
 
-class ActionWizard(ModelSQL, ModelView):
+    @classmethod
+    def write(cls, windows, values, *args):
+        pool = Pool()
+        super(ActionActWindowView, cls).write(windows, values, *args)
+        pool.get('ir.action.keyword')._get_keyword_cache.clear()
+
+    @classmethod
+    def delete(cls, windows):
+        pool = Pool()
+        super(ActionActWindowView, cls).delete(windows)
+        pool.get('ir.action.keyword')._get_keyword_cache.clear()
+
+
+class ActionActWindowDomain(ModelSQL, ModelView):
+    "Action act window domain"
+    __name__ = 'ir.action.act_window.domain'
+    name = fields.Char('Name', translate=True)
+    sequence = fields.Integer('Sequence', required=True)
+    domain = fields.Char('Domain')
+    act_window = fields.Many2One('ir.action.act_window', 'Action',
+        select=True, required=True, ondelete='CASCADE')
+    active = fields.Boolean('Active')
+
+    @classmethod
+    def __setup__(cls):
+        super(ActionActWindowDomain, cls).__setup__()
+        cls._order.insert(0, ('sequence', 'ASC'))
+
+    @staticmethod
+    def default_active():
+        return True
+
+
+class ActionWizard(ActionMixin, ModelSQL, ModelView):
     "Action wizard"
     __name__ = 'ir.action.wizard'
-    _inherits = {'ir.action': 'action'}
     wiz_name = fields.Char('Wizard name', required=True)
     action = fields.Many2One('ir.action', 'Action', required=True,
             ondelete='CASCADE')
@@ -797,57 +971,10 @@ class ActionWizard(ModelSQL, ModelView):
     def default_type():
         return 'ir.action.wizard'
 
-    @classmethod
-    def create(cls, vals):
-        later = {}
-        vals = vals.copy()
-        for field in vals:
-            if (field in cls._fields
-                    and hasattr(cls._fields[field], 'set')):
-                later[field] = vals[field]
-        for field in later:
-            del vals[field]
-        cursor = Transaction().cursor
-        if cursor.nextid(cls._table):
-            cursor.setnextid(cls._table, cursor.currid('ir_action'))
-        wizard = super(ActionWizard, cls).create(vals)
-        new_id = wizard.action.id
-        cursor.execute('UPDATE "' + cls._table + '" SET id = %s ' \
-                'WHERE id = %s', (wizard.action.id, wizard.id))
-        cursor.update_auto_increment(cls._table, wizard.action.id)
-        wizard = cls(new_id)
-        cls.write([wizard], later)
-        return wizard
 
-    @classmethod
-    def delete(cls, wizards):
-        pool = Pool()
-        Action = pool.get('ir.action')
-
-        actions = [x.action for x in wizards]
-
-        super(ActionWizard, cls).delete(wizards)
-        Action.delete(actions)
-
-    @classmethod
-    def copy(cls, wizards, default=None):
-        Action = Pool().get('ir.action')
-
-        if default is None:
-            default = {}
-        default = default.copy()
-        new_wizards = []
-        for wizard in wizards:
-            default['action'] = Action.copy([wizard.action])[0].id
-            new_wizards.extend(super(ActionWizard, cls).copy([wizard],
-                    default=default))
-        return new_wizards
-
-
-class ActionURL(ModelSQL, ModelView):
+class ActionURL(ActionMixin, ModelSQL, ModelView):
     "Action URL"
     __name__ = 'ir.action.url'
-    _inherits = {'ir.action': 'action'}
     url = fields.Char('Action Url', required=True)
     action = fields.Many2One('ir.action', 'Action', required=True,
             ondelete='CASCADE')
@@ -859,49 +986,3 @@ class ActionURL(ModelSQL, ModelView):
     @staticmethod
     def default_target():
         return 'new'
-
-    @classmethod
-    def create(cls, vals):
-        later = {}
-        vals = vals.copy()
-        for field in vals:
-            if (field in cls._fields
-                    and hasattr(cls._fields[field], 'set')):
-                later[field] = vals[field]
-        for field in later:
-            del vals[field]
-        cursor = Transaction().cursor
-        if cursor.nextid(cls._table):
-            cursor.setnextid(cls._table, cursor.currid('ir_action'))
-        url = super(ActionURL, cls).create(vals)
-        new_id = url.action.id
-        cursor.execute('UPDATE "' + cls._table + '" SET id = %s ' \
-                'WHERE id = %s', (url.action.id, url.id))
-        cursor.update_auto_increment(cls._table, url.action.id)
-        url = cls(new_id)
-        cls.write([url], later)
-        return url
-
-    @classmethod
-    def delete(cls, urls):
-        pool = Pool()
-        Action = pool.get('ir.action')
-
-        actions = [x.action for x in urls]
-
-        super(ActionURL, cls).delete(urls)
-        Action.delete(actions)
-
-    @classmethod
-    def copy(cls, urls, default=None):
-        Action = Pool().get('ir.action')
-
-        if default is None:
-            default = {}
-        default = default.copy()
-        new_urls = []
-        for url in urls:
-            default['action'] = Action.copy([url.action])[0].id
-            new_urls.extend(super(ActionURL, cls).copy([url],
-                    default=default))
-        return new_urls

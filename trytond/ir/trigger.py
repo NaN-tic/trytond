@@ -2,10 +2,13 @@
 #this repository contains the full copyright notices and license terms.
 import datetime
 import time
+from sql import Literal
+from sql.aggregate import Count, Max
+
 from ..model import ModelView, ModelSQL, fields
 from ..pyson import Eval
 from ..tools import safe_eval
-from ..backend import TableHandler
+from .. import backend
 from ..tools import reduce_ids
 from ..transaction import Transaction
 from ..cache import Cache
@@ -24,22 +27,18 @@ class Trigger(ModelSQL, ModelView):
     model = fields.Many2One('ir.model', 'Model', required=True, select=True)
     on_time = fields.Boolean('On Time', select=True, states={
             'invisible': (Eval('on_create', False)
-                or Eval('on_write', False)
-                or Eval('on_delete', False)),
-        }, depends=['on_create', 'on_write', 'on_delete'],
-        on_change=['on_time'])
+                | Eval('on_write', False)
+                | Eval('on_delete', False)),
+        }, depends=['on_create', 'on_write', 'on_delete'])
     on_create = fields.Boolean('On Create', select=True, states={
         'invisible': Eval('on_time', False),
-        }, depends=['on_time'],
-        on_change=['on_create'])
+        }, depends=['on_time'])
     on_write = fields.Boolean('On Write', select=True, states={
         'invisible': Eval('on_time', False),
-        }, depends=['on_time'],
-        on_change=['on_write'])
+        }, depends=['on_time'])
     on_delete = fields.Boolean('On Delete', select=True, states={
         'invisible': Eval('on_time', False),
-        }, depends=['on_time'],
-        on_change=['on_delete'])
+        }, depends=['on_time'])
     condition = fields.Char('Condition', required=True,
         help='A Python statement evaluated with record represented by '
         '"self"\nIt triggers the action if true.')
@@ -60,14 +59,17 @@ class Trigger(ModelSQL, ModelView):
             ('on_exclusive',
                 'CHECK(NOT(on_time AND (on_create OR on_write OR on_delete)))',
                 '"On Time" and others are mutually exclusive!'),
-        ]
-        cls._constraints += [
-            ('check_condition', 'invalid_condition'),
-        ]
+            ]
         cls._error_messages.update({
-            'invalid_condition': 'Condition must be a python expression!',
-        })
+                'invalid_condition': ('Condition "%(condition)s" is not a '
+                    'valid python expression on trigger "%(trigger)s".'),
+                })
         cls._order.insert(0, ('name', 'ASC'))
+
+    @classmethod
+    def validate(cls, triggers):
+        super(Trigger, cls).validate(triggers)
+        cls.check_condition(triggers)
 
     @classmethod
     def check_condition(cls, triggers):
@@ -78,8 +80,10 @@ class Trigger(ModelSQL, ModelView):
             try:
                 compile(trigger.condition, '', 'eval')
             except (SyntaxError, TypeError):
-                return False
-        return True
+                cls.raise_user_error('invalid_condition', {
+                        'condition': trigger.condition,
+                        'trigger': trigger.rec_name,
+                        })
 
     @staticmethod
     def default_active():
@@ -89,6 +93,7 @@ class Trigger(ModelSQL, ModelView):
     def default_limit_number():
         return 0
 
+    @fields.depends('on_time')
     def on_change_on_time(self):
         if self.on_time:
             return {
@@ -98,6 +103,7 @@ class Trigger(ModelSQL, ModelView):
                     }
         return {}
 
+    @fields.depends('on_create')
     def on_change_on_create(self):
         if self.on_create:
             return {
@@ -105,6 +111,7 @@ class Trigger(ModelSQL, ModelView):
                     }
         return {}
 
+    @fields.depends('on_write')
     def on_change_on_write(self):
         if self.on_write:
             return {
@@ -112,6 +119,7 @@ class Trigger(ModelSQL, ModelView):
                     }
         return {}
 
+    @fields.depends('on_delete')
     def on_change_on_delete(self):
         if self.on_delete:
             return {
@@ -125,10 +133,10 @@ class Trigger(ModelSQL, ModelView):
         Return triggers for a model and a mode
         """
         assert mode in ['create', 'write', 'delete', 'time'], \
-                'Invalid trigger mode'
+            'Invalid trigger mode'
 
-        if Transaction().user == 0:
-            return []  # XXX is it want we want?
+        if Transaction().user == 0 and not Transaction().context.get('user'):
+            return []
 
         key = (model_name, mode)
         trigger_ids = cls._get_triggers_cache.get(key)
@@ -164,19 +172,20 @@ class Trigger(ModelSQL, ModelView):
         Model = pool.get(trigger.model.model)
         ActionModel = pool.get(trigger.action_model.model)
         cursor = Transaction().cursor
+        in_max = cursor.IN_MAX
+        trigger_log = TriggerLog.__table__()
         ids = map(int, records)
 
         # Filter on limit_number
         if trigger.limit_number:
             new_ids = []
-            for i in range(0, len(ids), cursor.IN_MAX):
-                sub_ids = ids[i:i + cursor.IN_MAX]
-                red_sql, red_ids = reduce_ids('"record_id"', sub_ids)
-                cursor.execute('SELECT "record_id", COUNT(1) FROM "%s" '
-                        'WHERE %s AND "trigger" = %%s '
-                        'GROUP BY "record_id"'
-                        % (TriggerLog._table, red_sql),
-                        red_ids + [trigger.id])
+            for i in range(0, len(ids), in_max):
+                sub_ids = ids[i:i + in_max]
+                red_sql = reduce_ids(trigger_log.record_id, sub_ids)
+                cursor.execute(*trigger_log.select(
+                        trigger_log.record_id, Count(Literal(1)),
+                        where=red_sql & (trigger_log.trigger == trigger.id),
+                        group_by=trigger_log.record_id))
                 number = dict(cursor.fetchall())
                 for record_id in sub_ids:
                     if record_id not in number:
@@ -189,15 +198,13 @@ class Trigger(ModelSQL, ModelView):
         # Filter on minimum_delay
         if trigger.minimum_delay:
             new_ids = []
-            for i in range(0, len(ids), cursor.IN_MAX):
-                sub_ids = ids[i:i + cursor.IN_MAX]
-                red_sql, red_ids = reduce_ids('"record_id"', sub_ids)
-                cursor.execute('SELECT "record_id", MAX("create_date") '
-                        'FROM "%s" '
-                        'WHERE %s AND "trigger" = %%s '
-                        'GROUP BY "record_id"'
-                        % (TriggerLog._table, red_sql),
-                        red_ids + [trigger.id])
+            for i in range(0, len(ids), in_max):
+                sub_ids = ids[i:i + in_max]
+                red_sql = reduce_ids(trigger_log.record_id, sub_ids)
+                cursor.execute(*trigger_log.select(
+                        trigger_log.record_id, Max(trigger_log.create_date),
+                        where=red_sql & (trigger_log.trigger == trigger.id),
+                        group_by=trigger_log.record_id))
                 delay = dict(cursor.fetchall())
                 for record_id in sub_ids:
                     if record_id not in delay:
@@ -226,11 +233,14 @@ class Trigger(ModelSQL, ModelView):
         if records:
             getattr(ActionModel, trigger.action_function)(records, trigger)
         if trigger.limit_number or trigger.minimum_delay:
+            to_create = []
             for record in records:
-                TriggerLog.create({
-                    'trigger': trigger.id,
-                    'record_id': record.id,
-                    })
+                to_create.append({
+                        'trigger': trigger.id,
+                        'record_id': record.id,
+                        })
+            if to_create:
+                TriggerLog.create(to_create)
 
     @classmethod
     def trigger_time(cls):
@@ -253,18 +263,17 @@ class Trigger(ModelSQL, ModelView):
                 cls.trigger_action(triggered, trigger)
 
     @classmethod
-    def create(cls, values):
-        res = super(Trigger, cls).create(values)
+    def create(cls, vlist):
+        res = super(Trigger, cls).create(vlist)
         # Restart the cache on the get_triggers method of ir.trigger
         cls._get_triggers_cache.clear()
         return res
 
     @classmethod
-    def write(cls, ids, values):
-        res = super(Trigger, cls).write(ids, values)
+    def write(cls, triggers, values, *args):
+        super(Trigger, cls).write(triggers, values, *args)
         # Restart the cache on the get_triggers method of ir.trigger
         cls._get_triggers_cache.clear()
-        return res
 
     @classmethod
     def delete(cls, records):
@@ -281,6 +290,7 @@ class TriggerLog(ModelSQL):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         super(TriggerLog, cls).__register__(module_name)
 
         table = TableHandler(Transaction().cursor, cls, module_name)

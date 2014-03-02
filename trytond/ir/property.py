@@ -23,11 +23,15 @@ class Property(ModelSQL, ModelView):
 
     @classmethod
     def models_get(cls):
+        pool = Pool()
+        Model = pool.get('ir.model')
         models = cls._models_get_cache.get(None)
         if models:
             return models
         cursor = Transaction().cursor
-        cursor.execute('SELECT model, name FROM ir_model ORDER BY name ASC')
+        model = Model.__table__()
+        cursor.execute(*model.select(model.model, model.name,
+                order_by=model.name.asc))
         models = cursor.fetchall() + [('', '')]
         cls._models_get_cache.set(None, models)
         return models
@@ -157,4 +161,4 @@ class Property(ModelSQL, ModelView):
             for res_id in ids:
                 vals = cls._set_values(model, res_id, val, model_field.id)
                 with Transaction().set_user(0, set_context=True):
-                    cls.create(vals).id
+                    cls.create([vals])

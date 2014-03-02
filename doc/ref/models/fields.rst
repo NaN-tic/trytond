@@ -77,7 +77,7 @@ If true, the content of the field will be indexed.
 
 .. attribute:: Field.on_change
 
-A list of field names. If this attribute is set, the client will call the
+A set of field names. If this attribute is set, the client will call the
 method ``on_change_<field name>`` of the model when the user changes the
 current field value and will give the values of each fields in this list. The
 method signature is::
@@ -88,15 +88,17 @@ This method must return a dictionary with the values of fields to be updated.
 
 .. note::
 
-    The on_change_<field name> methods are runnin in a rollbacked transaction.
+    The on_change_<field name> methods are running in a rollbacked transaction.
 ..
+
+The set of field names could be filled by using the decorator :meth:`depends`.
 
 ``on_change_with``
 ------------------
 
 .. attribute:: Field.on_change_with
 
-A list of field names. Same like :attr:`on_change`, but defined the other way
+A set of field names. Same like :attr:`on_change`, but defined the other way
 around. If this attribute is set, the client will call the method
 ``on_change_with_<field name>`` of the model when the user changes one of the
 fields defined in the list and will give the values of each fields in this
@@ -112,6 +114,8 @@ This method must return the new value of the field.
 
 ..
 
+The set of field names could be filled by using the decorator :meth:`depends`.
+
 ``depends``
 -----------
 
@@ -121,15 +125,6 @@ A list of field names on which the current one depends. This means that the
 client will also read these fields even if they are not defined on the view.
 :attr:`Field.depends` is used per example to ensure that
 :class:`~trytond.pyson.PYSON` statement could be evaluated.
-
-``order_field``
----------------
-
-.. attribute:: Field.order_field
-
-The name of a substitute field on which the ordering of records must be done
-instead of this one.
-This is often used to allow ordering on :class:`Function` fields.
 
 ``context``
 -----------
@@ -153,10 +148,59 @@ Define how the field must be loaded: ``lazy`` or ``eager``.
 
 The name of the field.
 
+Instance methods:
+
+.. method:: Field.convert_domain(domain, tables, Model)
+
+    Convert the simple :ref:`domain <topics-domain>` clause into a SQL
+    expression or a new domain.
+
+Where ``tables`` is a nested dictionary containing the existing joins (and it
+could be updated to add new joins)::
+
+    {
+        None: (<Table invoice>, None),
+        'party': {
+            None: (<Table party>, <join_on sql expression>),
+            'addresses': {
+                None: (<Table address>, <join_on sql expression>),
+                },
+            },
+        }
+
+.. method:: Field.sql_format(value)
+
+    Convert the value to use as parameter of SQL queries.
+
+.. method:: Field.sql_type()
+
+    Return the namedtuple('SQLType', 'base type') which defines the SQL type to
+    use for creation and casting.
+
 Default value
 =============
 
 See :ref:`default value <topics-fields_default_value>`
+
+Ordering
+========
+
+A class method could be defined for each field which must return a list of SQL
+expression on which to order instead of the field.
+The method signature is::
+
+    order_<field name>(tables)
+
+Where ``tables`` is a nested dictionary, see :meth:`~Field.convert_domain`.
+
+Depends
+=======
+
+.. method:: depends([\*fields[, methods]])
+
+A decorator to define the field names on which the decorated method depends.
+The `methods` argument can be used to duplicate the field names from other
+fields. This is usefull if the decorated method calls another method.
 
 Field types
 ===========
@@ -203,7 +247,7 @@ A single line string field.
 
 .. attribute:: Char.autocomplete
 
-    A list of field names. If this attribute is set, the client will call the
+    A set of field names. If this attribute is set, the client will call the
     method ``autocomplete_<field name>`` of the model when the user changes one
     of those field value. The method signature is::
 
@@ -211,6 +255,7 @@ A single line string field.
 
     This method must return a list of string that will populate the
     ComboboxEntry in the client.
+    The set of field names could be filled by using the decorator :meth:`depends`.
 
 Sha
 ---
@@ -289,6 +334,13 @@ A date and time, represented in Python by a ``datetime.datetime`` instance.
     the time part of the field. The default value is `%H:%M:%S`.
     The value can be replaced by a :class:`~trytond.pyson.PYSON` statement.
 
+Timestamp
+---------
+
+.. class:: Timestamp(string[, \**options])
+
+A timestamp, represented in Python by a ``datetime.datetime`` instance.
+
 Time
 ----
 
@@ -307,10 +359,20 @@ Binary
 
 A binary field. It will be represented in Python by a ``str`` instance.
 
+:class:`Binary` has one extra optional argument:
+
+.. attribute:: Binary.filename
+
+    Name of the field that holds the data's filename. Default value
+    is an empty string, which means the data has no filename (in this case, the
+    filename is hidden, and the "Open" button is hidden when the widget is set
+    to "image").
+
+
 Selection
 ---------
 
-.. class:: Selection(selection, string[, sort[, translate[, \**options]]])
+.. class:: Selection(selection, string[, sort[, selection_change_with[, translate[, \**options]]])
 
 A string field with limited values to choice.
 
@@ -328,7 +390,7 @@ A string field with limited values to choice.
     The first element in each tuple is the actual value stored. The second
     element is the human-readable name.
 
-    It can also be the name of a method on the model, that will return an
+    It can also be the name of a class method on the model, that will return an
     appropriate list. The signature of the method is::
 
         selection()
@@ -345,6 +407,14 @@ A string field with limited values to choice.
     If true, the choices will be sorted by human-readable value. Default value
     is ``True``.
 
+.. attribute:: Selection.selection_change_with
+
+    A set of field names. If this attribute is set, the client will call the
+    ``selection`` method of the model when the user changes on of the fields
+    defined in the list and will give the values of each fields in the list.
+    The ``selection`` method should be an instance method.
+    The set of field names could be filled by using the decorator :meth:`depends`.
+
 .. attribute:: Selection.translate_selection
 
     If true, the human-readable values will be translated. Default value is
@@ -353,7 +423,7 @@ A string field with limited values to choice.
 Reference
 ---------
 
-.. class:: Reference(string[, selection[, \**options]])
+.. class:: Reference(string[, selection[, selection_change_with[, \**options]])
 
 A field that refers to a record of a model. It will be represented in Python by
 a ``str`` instance like this::
@@ -367,6 +437,10 @@ But a ``tuple`` can be used to search or set value.
 .. attribute:: Reference.selection
 
     Same as :attr:`Selection.selection` but only for model name.
+
+.. attribute:: Reference.selection_change_with
+
+Same like :attr:`Selection.selection_change_with`.
 
 Many2One
 --------
@@ -433,24 +507,22 @@ model.
 
 This field accepts as written value a list of tuples like this:
 
-    - ``('create', {<field name>: value, ...})``: it will create a new target
-      record and link it to this one.
+    - ``('create', [{<field name>: value, ...}, ...])``: it will create new
+      target records and link them to this one.
 
-    - ``('write'[, ids, ...], {<field name>: value, ...})``: it will write
-      values to target ids.
+    - ``('write'[[, ids, ...], {<field name>: value, ...}, ...])``: it will
+      write values to target ids.
 
     - ``('delete'[, ids, ...])``: it will delete the target ids.
 
-    - ``('delete_all')``: it will delete all the target records.
-
     - ``('add'[, ids, ...])``: it will link the target ids to this record.
 
-    - ``('unlink'[, ids, ...])``: it will unlink the target ids from this
+    - ``('remove'[, ids, ...])``: it will unlink the target ids from this
       record.
 
-    - ``('unlink_all')``: it will unlink all the target records.
-
-    - ``('set'[, ids, ...])``: it will link only the target ids to this record.
+    - ``('copy', ids[, {<field name>: value, ...}])``: it will copy the target
+      ids to this record. Optional field names and values may be added to
+      override some of the fields of the copied records.
 
 :class:`One2Many` has some extra required arguments:
 
@@ -490,7 +562,11 @@ Many2Many
 
 .. class:: Many2Many(relation_name, origin, target, string[, order[, datetime_field[, size[, \**options]]]])
 
-A many-to-many relation field.
+A many-to-many relation field. It requires to have the opposite origin
+:class:`Many2One` field or a:class:`Reference` field defined on the relation
+model and a :class:`Many2One` field pointing to the target.
+
+This field accepts as written value a list of tuples like the :class:`One2Many`.
 
 :class:`Many2Many` has some extra required arguments:
 
@@ -614,7 +690,8 @@ A function field can emulate any other given `field`.
 
     where `name` is the name of the field and `clause` is a
     :ref:`domain clause <topics-domain>`.
-    It must return a list of :ref:`domain <topics-domain>` clauses.
+    It must return a list of :ref:`domain <topics-domain>` clauses but the
+    ``operand`` can be a SQL query.
 
 Instance methods:
 
@@ -659,3 +736,17 @@ Instance methods:
 .. method:: Property.search(model, name, clause)
 
     Same as :meth:`Function.search`.
+
+Dict
+----
+
+.. class:: Dict(schema_model[, \**options])
+
+A dictionary field with predefined keys.
+
+:class:`Dict` has one extra required argument:
+
+.. attribute:: Dict.schema_model
+
+    The name of the :class:`DictSchemaMixin` model that stores the definition
+    of keys.

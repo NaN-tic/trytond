@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 import unittest
@@ -29,37 +28,61 @@ def manipulate_cursor(*args, **kwargs):
 
 
 class TransactionTestCase(unittest.TestCase):
-    '''
-    Test the Transaction Context manager
-    '''
+    'Test the Transaction Context manager'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
 
     def test0010nonexistdb(self):
-        '''
-        Attempt opening a transaction with a non existant DB and ensure that
-        it stops cleanly and allows starting of next transaction
-        '''
+        '''Attempt opening a transaction with a non existant DB
+        and ensure that it stops cleanly and allows starting of next
+        transaction'''
         self.assertRaises(
             Exception, empty_transaction, "Non existant DB", USER,
             context=CONTEXT)
         self.assertTrue(empty_transaction(DB_NAME, USER, context=CONTEXT))
 
     def test0020cursorclose(self):
-        '''
-        Manipulate the cursor during the transaction so that the close in
-        transaction stop fails. Ensure that this does not affect opening of
-        another transaction
-        '''
+        '''Manipulate the cursor during the transaction so that
+        the close in transaction stop fails.
+        Ensure that this does not affect opening of another transaction'''
         self.assertRaises(
             Exception, manipulate_cursor, DB_NAME, USER, context=CONTEXT)
         self.assertTrue(empty_transaction(DB_NAME, USER, context=CONTEXT))
 
+    def test0030set_user(self):
+        'Test set_user'
+        with Transaction().start(DB_NAME, USER, context=CONTEXT) \
+                as transaction:
+            self.assertEqual(transaction.user, USER)
+            self.assertEqual(transaction.context.get('user'), None)
+
+            with Transaction().set_user(0):
+                self.assertEqual(transaction.user, 0)
+                self.assertEqual(transaction.context.get('user'), None)
+
+            with Transaction().set_user(0, set_context=True):
+                self.assertEqual(transaction.user, 0)
+                self.assertEqual(transaction.context.get('user'), USER)
+
+                # Nested same set_user should keep original context user
+                with Transaction().set_user(0, set_context=True):
+                    self.assertEqual(transaction.user, 0)
+                    self.assertEqual(transaction.context.get('user'), USER)
+
+                # Unset user context
+                with Transaction().set_user(0, set_context=False):
+                    self.assertEqual(transaction.user, 0)
+                    self.assertEqual(transaction.context.get('user'), None)
+
+            # set context for non root
+            self.assertRaises(ValueError,
+                Transaction().set_user, 2, set_context=True)
+
+            # not set context for non root
+            with Transaction().set_user(2):
+                self.assertEqual(transaction.user, 2)
+
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(TransactionTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)

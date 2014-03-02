@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
@@ -10,18 +9,14 @@ from trytond.transaction import Transaction
 
 
 class ModelSingletonTestCase(unittest.TestCase):
-    '''
-    Test ModelSingleton
-    '''
+    'Test ModelSingleton'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.singleton = POOL.get('test.singleton')
 
     def test0010read(self):
-        '''
-        Test read method.
-        '''
+        'Test read method'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             singleton, = self.singleton.read([1], ['name'])
@@ -34,28 +29,28 @@ class ModelSingletonTestCase(unittest.TestCase):
 
             singleton, = self.singleton.read([1], [
                 'create_uid',
+                'create_uid.rec_name',
                 'create_date',
                 'write_uid',
                 'write_date',
                 ])
             self.assertEqual(singleton['create_uid'], USER)
+            self.assertEqual(singleton['create_uid.rec_name'], 'Administrator')
             self.assert_(isinstance(singleton['create_date'], datetime))
-            self.assertEqual(singleton['write_uid'], False)
-            self.assertEqual(singleton['write_date'], False)
+            self.assertEqual(singleton['write_uid'], None)
+            self.assertEqual(singleton['write_date'], None)
 
             transaction.cursor.rollback()
 
     def test0020create(self):
-        '''
-        Test create method.
-        '''
+        'Test create method'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            singleton = self.singleton.create({'name': 'bar'})
+            singleton, = self.singleton.create([{'name': 'bar'}])
             self.assert_(singleton)
             self.assertEqual(singleton.name, 'bar')
 
-            singleton2 = self.singleton.create({'name': 'foo'})
+            singleton2, = self.singleton.create([{'name': 'foo'}])
             self.assertEqual(singleton2, singleton)
 
             self.assertEqual(singleton.name, 'foo')
@@ -66,9 +61,7 @@ class ModelSingletonTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0030copy(self):
-        '''
-        Test copy method.
-        '''
+        'Test copy method'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             singleton, = self.singleton.search([])
@@ -88,9 +81,7 @@ class ModelSingletonTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0040default_get(self):
-        '''
-        Test default_get method.
-        '''
+        'Test default_get method'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             default = self.singleton.default_get(['name'])
@@ -103,7 +94,7 @@ class ModelSingletonTestCase(unittest.TestCase):
                     with_rec_name=False)
             self.assertEqual(len(default), 1)
 
-            self.singleton.create({'name': 'bar'})
+            self.singleton.create([{'name': 'bar'}])
 
             default = self.singleton.default_get(['name'])
             self.assertEqual(default, {'name': 'bar'})
@@ -118,9 +109,7 @@ class ModelSingletonTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0050search(self):
-        '''
-        Test search method.
-        '''
+        'Test search method'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             singletons = self.singleton.search([])
@@ -137,7 +126,3 @@ class ModelSingletonTestCase(unittest.TestCase):
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(ModelSingletonTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)

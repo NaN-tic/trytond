@@ -3,8 +3,7 @@
 from trytond.protocols.sslsocket import SSLSocket
 from trytond.protocols.dispatcher import dispatch
 from trytond.config import CONFIG
-from trytond.protocols.common import daemon, GZipRequestHandlerMixin, \
-    RegisterHandlerMixin
+from trytond.protocols.common import daemon, RegisterHandlerMixin
 from trytond.exceptions import UserError, UserWarning, NotLogged, \
     ConcurrencyException
 import SimpleXMLRPCServer
@@ -157,8 +156,7 @@ class GenericJSONRPCRequestHandler:
         return res
 
 
-class SimpleJSONRPCRequestHandler(GZipRequestHandlerMixin,
-        RegisterHandlerMixin,
+class SimpleJSONRPCRequestHandler(RegisterHandlerMixin,
         GenericJSONRPCRequestHandler,
         SimpleXMLRPCServer.SimpleXMLRPCRequestHandler,
         SimpleHTTPServer.SimpleHTTPRequestHandler):
@@ -251,14 +249,16 @@ class SimpleJSONRPCRequestHandler(GZipRequestHandlerMixin,
         self.copyfile(content, self.wfile)
         content.close()
 
+SimpleJSONRPCRequestHandler.extensions_map.update({
+        '.svg': 'image/svg+xml',
+        })
+
 
 class SecureJSONRPCRequestHandler(SimpleJSONRPCRequestHandler):
 
     def setup(self):
-        self.server.handlers.add(self)
-        self.connection = SSLSocket(self.request)
-        self.rfile = socket._fileobject(self.request, "rb", self.rbufsize)
-        self.wfile = socket._fileobject(self.request, "wb", self.wbufsize)
+        self.request = SSLSocket(self.request)
+        SimpleJSONRPCRequestHandler.setup(self)
 
 
 class SimpleJSONRPCServer(SocketServer.TCPServer,
@@ -323,14 +323,13 @@ class SimpleThreadedJSONRPCServer(SocketServer.ThreadingMixIn,
         SimpleJSONRPCServer):
     timeout = 1
     daemon_threads = True
+    disable_nagle_algorithm = True
 
     def server_bind(self):
         self.socket.setsockopt(socket.SOL_SOCKET,
                 socket.SO_REUSEADDR, 1)
         self.socket.setsockopt(socket.SOL_SOCKET,
             socket.SO_KEEPALIVE, 1)
-        self.socket.setsockopt(socket.IPPROTO_TCP,
-            socket.TCP_NODELAY, 1)
         SimpleJSONRPCServer.server_bind(self)
 
 
@@ -343,8 +342,8 @@ class SecureThreadedJSONRPCServer(SimpleThreadedJSONRPCServer):
     def __init__(self, server_address, HandlerClass, logRequests=1):
         SimpleThreadedJSONRPCServer.__init__(self, server_address,
             HandlerClass, logRequests)
-        self.socket = SSLSocket(socket.socket(self.address_family,
-            self.socket_type))
+        self.socket = socket.socket(self.address_family,
+            self.socket_type)
         self.server_bind()
         self.server_activate()
 

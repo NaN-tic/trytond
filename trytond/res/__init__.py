@@ -3,7 +3,6 @@
 from ..pool import Pool
 from .group import *
 from .user import *
-from .request import *
 from .ir import *
 
 
@@ -11,15 +10,12 @@ def register():
     Pool.register(
         Group,
         User,
+        LoginAttempt,
         Group2,
         UserAction,
         UserGroup,
         Warning_,
         UserConfigStart,
-        Request,
-        RequestLink,
-        RequestHistory,
-        RequestReference,
         UIMenuGroup,
         ActionGroup,
         ModelFieldGroup,

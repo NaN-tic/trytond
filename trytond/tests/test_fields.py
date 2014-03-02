@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
@@ -16,15 +15,14 @@ from decimal import Decimal
 from trytond.tests.test_tryton import POOL, DB_NAME, USER, CONTEXT, \
         install_module
 from trytond.transaction import Transaction
+from trytond.exceptions import UserError
 
 
 class FieldsTestCase(unittest.TestCase):
-    '''
-    Test Fields.
-    '''
+    'Test Fields'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.boolean = POOL.get('test.boolean')
         self.boolean_default = POOL.get('test.boolean_default')
 
@@ -75,6 +73,7 @@ class FieldsTestCase(unittest.TestCase):
         self.one2one = POOL.get('test.one2one')
         self.one2one_target = POOL.get('test.one2one.target')
         self.one2one_required = POOL.get('test.one2one_required')
+        self.one2one_domain = POOL.get('test.one2one_domain')
 
         self.one2many = POOL.get('test.one2many')
         self.one2many_target = POOL.get('test.one2many.target')
@@ -102,15 +101,27 @@ class FieldsTestCase(unittest.TestCase):
         self.ir_property = POOL.get('ir.property')
         self.model_field = POOL.get('ir.model.field')
 
+        self.selection = POOL.get('test.selection')
+        self.selection_required = POOL.get('test.selection_required')
+
+        self.dict_ = POOL.get('test.dict')
+        self.dict_default = POOL.get('test.dict_default')
+        self.dict_required = POOL.get('test.dict_required')
+
+        self.binary = POOL.get('test.binary')
+        self.binary_default = POOL.get('test.binary_default')
+        self.binary_required = POOL.get('test.binary_required')
+
+        self.m2o_domain_validation = POOL.get('test.many2one_domainvalidation')
+        self.m2o_target = POOL.get('test.many2one_target')
+
     def test0010boolean(self):
-        '''
-        Test Boolean.
-        '''
+        'Test Boolean'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            boolean1 = self.boolean.create({
-                    'boolean': True,
-                    })
+            boolean1, = self.boolean.create([{
+                        'boolean': True,
+                        }])
             self.assert_(boolean1)
             self.assertEqual(boolean1.boolean, True)
 
@@ -144,9 +155,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(booleans, [boolean1])
 
-            boolean2 = self.boolean.create({
-                    'boolean': False,
-                    })
+            boolean2, = self.boolean.create([{
+                        'boolean': False,
+                        }])
             self.assert_(boolean2)
             self.assertEqual(boolean2.boolean, False)
 
@@ -165,14 +176,14 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(booleans, [])
 
-            boolean3 = self.boolean.create({})
+            boolean3, = self.boolean.create([{}])
             self.assert_(boolean3)
             self.assertEqual(boolean3.boolean, False)
 
             # Test search with NULL value
-            boolean4 = self.boolean.create({
-                    'boolean': None,
-                    })
+            boolean4, = self.boolean.create([{
+                        'boolean': None,
+                        }])
             self.assert_(boolean4)
 
             booleans = self.boolean.search([
@@ -186,9 +197,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(booleans, [boolean1])
 
-            boolean4 = self.boolean_default.create({})
+            boolean4, = self.boolean_default.create([{}])
             self.assert_(boolean4)
-            self.assert_(boolean4.boolean == True)
+            self.assertTrue(boolean4.boolean)
 
             self.boolean.write([boolean1], {
                     'boolean': False,
@@ -203,14 +214,12 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0020integer(self):
-        '''
-        Test Integer.
-        '''
+        'Test Integer'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            integer1 = self.integer.create({
-                    'integer': 1,
-                    })
+            integer1, = self.integer.create([{
+                        'integer': 1,
+                        }])
             self.assert_(integer1)
             self.assertEqual(integer1.integer, 1)
 
@@ -324,9 +333,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(integers, [integer1])
 
-            integer2 = self.integer.create({
-                    'integer': 0,
-                    })
+            integer2, = self.integer.create([{
+                        'integer': 0,
+                        }])
             self.assert_(integer2)
             self.assertEqual(integer2.integer, 0)
 
@@ -345,11 +354,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(integers, [])
 
-            integer3 = self.integer.create({})
+            integer3, = self.integer.create([{}])
             self.assert_(integer3)
             self.assertEqual(integer3.integer, None)
 
-            integer4 = self.integer_default.create({})
+            integer4, = self.integer_default.create([{}])
             self.assert_(integer4)
             self.assertEqual(integer4.integer, 5)
 
@@ -363,9 +372,9 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(integer2.integer, 1)
 
-            self.assertRaises(Exception, self.integer.create, {
-                    'integer': 'test',
-                    })
+            self.assertRaises(Exception, self.integer.create, [{
+                        'integer': 'test',
+                        }])
 
             self.assertRaises(Exception, self.integer.write, [integer1], {
                     'integer': 'test',
@@ -373,26 +382,24 @@ class FieldsTestCase(unittest.TestCase):
 
             # We should catch UserError but mysql does not raise an
             # IntegrityError but an OperationalError
-            self.assertRaises(Exception, self.integer_required.create, {})
+            self.assertRaises(Exception, self.integer_required.create, [{}])
             transaction.cursor.rollback()
 
-            integer5 = self.integer_required.create({
-                    'integer': 0,
-                    })
+            integer5, = self.integer_required.create([{
+                        'integer': 0,
+                        }])
             self.assert_(integer5)
             self.assertEqual(integer5.integer, 0)
 
             transaction.cursor.rollback()
 
     def test0030float(self):
-        '''
-        Test Float.
-        '''
+        'Test Float'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            float1 = self.float.create({
-                    'float': 1.1,
-                    })
+            float1, = self.float.create([{
+                        'float': 1.1,
+                        }])
             self.assert_(float1)
             self.assertEqual(float1.float, 1.1)
 
@@ -506,9 +513,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(floats, [float1])
 
-            float2 = self.float.create({
-                    'float': 0,
-                    })
+            float2, = self.float.create([{
+                        'float': 0,
+                        }])
             self.assert_(float2)
             self.assertEqual(float2.float, 0)
 
@@ -527,11 +534,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(floats, [])
 
-            float3 = self.float.create({})
+            float3, = self.float.create([{}])
             self.assert_(float3)
             self.assertEqual(float3.float, None)
 
-            float4 = self.float_default.create({})
+            float4, = self.float_default.create([{}])
             self.assert_(float4)
             self.assertEqual(float4.float, 5.5)
 
@@ -545,32 +552,32 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(float2.float, 1.1)
 
-            self.assertRaises(Exception, self.float.create, {
-                    'float': 'test',
-                    })
+            self.assertRaises(Exception, self.float.create, [{
+                        'float': 'test',
+                        }])
 
             self.assertRaises(Exception, self.float.write, [float1], {
                     'float': 'test',
                     })
 
-            self.assertRaises(Exception, self.float_required.create, {})
+            self.assertRaises(Exception, self.float_required.create, [{}])
             transaction.cursor.rollback()
 
-            float5 = self.float_required.create({
-                    'float': 0.0,
-                    })
+            float5, = self.float_required.create([{
+                        'float': 0.0,
+                        }])
             self.assertEqual(float5.float, 0.0)
 
-            float6 = self.float_digits.create({
-                    'digits': 1,
-                    'float': 1.1,
-                    })
+            float6, = self.float_digits.create([{
+                        'digits': 1,
+                        'float': 1.1,
+                        }])
             self.assert_(float6)
 
-            self.assertRaises(Exception, self.float_digits.create, {
-                    'digits': 1,
-                    'float': 1.11,
-                    })
+            self.assertRaises(Exception, self.float_digits.create, [{
+                        'digits': 1,
+                        'float': 1.11,
+                        }])
 
             self.assertRaises(Exception, self.float_digits.write,
                 [float6], {
@@ -582,22 +589,20 @@ class FieldsTestCase(unittest.TestCase):
                     'digits': 0,
                     })
 
-            float7 = self.float.create({
-                    'float': 0.123456789012345,
-                    })
+            float7, = self.float.create([{
+                        'float': 0.123456789012345,
+                        }])
             self.assertEqual(float7.float, 0.123456789012345)
 
             transaction.cursor.rollback()
 
     def test0040numeric(self):
-        '''
-        Test Numeric.
-        '''
+        'Test Numeric'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            numeric1 = self.numeric.create({
-                    'numeric': Decimal('1.1'),
-                    })
+            numeric1, = self.numeric.create([{
+                        'numeric': Decimal('1.1'),
+                        }])
             self.assert_(numeric1)
             self.assertEqual(numeric1.numeric, Decimal('1.1'))
 
@@ -711,9 +716,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(numerics, [numeric1])
 
-            numeric2 = self.numeric.create({
-                    'numeric': Decimal('0'),
-                    })
+            numeric2, = self.numeric.create([{
+                        'numeric': Decimal('0'),
+                        }])
             self.assert_(numeric2)
             self.assertEqual(numeric2.numeric, Decimal('0'))
 
@@ -732,11 +737,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(numerics, [])
 
-            numeric3 = self.numeric.create({})
+            numeric3, = self.numeric.create([{}])
             self.assert_(numeric3)
             self.assertEqual(numeric3.numeric, None)
 
-            numeric4 = self.numeric_default.create({})
+            numeric4, = self.numeric_default.create([{}])
             self.assert_(numeric4)
             self.assertEqual(numeric4.numeric, Decimal('5.5'))
 
@@ -750,32 +755,32 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(numeric2.numeric, Decimal('1.1'))
 
-            self.assertRaises(Exception, self.numeric.create, {
-                    'numeric': 'test',
-                    })
+            self.assertRaises(Exception, self.numeric.create, [{
+                        'numeric': 'test',
+                        }])
 
             self.assertRaises(Exception, self.numeric.write, [numeric1], {
                     'numeric': 'test',
                     })
 
-            self.assertRaises(Exception, self.numeric_required.create, {})
+            self.assertRaises(Exception, self.numeric_required.create, [{}])
             transaction.cursor.rollback()
 
-            numeric5 = self.numeric_required.create({
+            numeric5, = self.numeric_required.create([{
                     'numeric': Decimal(0),
-                    })
+                    }])
             self.assertEqual(numeric5.numeric, 0)
 
-            numeric6 = self.numeric_digits.create({
-                    'digits': 1,
-                    'numeric': Decimal('1.1'),
-                    })
+            numeric6, = self.numeric_digits.create([{
+                        'digits': 1,
+                        'numeric': Decimal('1.1'),
+                        }])
             self.assert_(numeric6)
 
-            self.assertRaises(Exception, self.numeric_digits.create, {
-                    'digits': 1,
-                    'numeric': Decimal('1.11'),
-                    })
+            self.assertRaises(Exception, self.numeric_digits.create, [{
+                        'digits': 1,
+                        'numeric': Decimal('1.11'),
+                        }])
 
             self.assertRaises(Exception, self.numeric_digits.write,
                 [numeric6], {
@@ -792,24 +797,22 @@ class FieldsTestCase(unittest.TestCase):
                     'digits': 0,
                     })
 
-            numeric7 = self.numeric.create({
-                    'numeric': Decimal('0.1234567890123456789'),
-                    })
+            numeric7, = self.numeric.create([{
+                        'numeric': Decimal('0.1234567890123456789'),
+                        }])
             self.assertEqual(numeric7.numeric,
                 Decimal('0.1234567890123456789'))
 
             transaction.cursor.rollback()
 
     def test0050char(self):
-        '''
-        Test Char.
-        '''
+        'Test Char'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             for char in (self.char_translate, self.char):
-                char1 = char.create({
-                        'char': 'Test',
-                        })
+                char1, = char.create([{
+                            'char': 'Test',
+                            }])
                 self.assert_(char1)
                 self.assertEqual(char1.char, 'Test')
 
@@ -963,9 +966,9 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(chars, [char1])
 
-                char2 = char.create({
-                        'char': None,
-                        })
+                char2, = char.create([{
+                            'char': None,
+                            }])
                 self.assert_(char2)
                 self.assertEqual(char2.char, None)
 
@@ -984,11 +987,11 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(chars, [])
 
-            char3 = self.char.create({})
+            char3, = self.char.create([{}])
             self.assert_(char3)
             self.assertEqual(char3.char, None)
 
-            char4 = self.char_default.create({})
+            char4, = self.char_default.create([{}])
             self.assert_(char4)
             self.assertEqual(char4.char, 'Test')
 
@@ -1002,36 +1005,36 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(char2.char, 'Test')
 
-            self.assertRaises(Exception, self.char_required.create, {})
+            self.assertRaises(Exception, self.char_required.create, [{}])
             transaction.cursor.rollback()
 
-            self.assertRaises(Exception, self.char_required.create, {
+            self.assertRaises(Exception, self.char_required.create, [{
                     'char': '',
-                    })
+                    }])
             transaction.cursor.rollback()
 
-            char5 = self.char_required.create({
-                    'char': 'Test',
-                    })
+            char5, = self.char_required.create([{
+                        'char': 'Test',
+                        }])
             self.assert_(char5)
 
-            char6 = self.char_size.create({
-                    'char': 'Test',
-                    })
+            char6, = self.char_size.create([{
+                        'char': 'Test',
+                        }])
             self.assert_(char6)
 
-            self.assertRaises(Exception, self.char_size.create, {
+            self.assertRaises(Exception, self.char_size.create, [{
                     'char': 'foobar',
-                    })
+                    }])
 
             self.assertRaises(Exception, self.char_size.write, [char6], {
                     'char': 'foobar',
                     })
             transaction.cursor.rollback()
 
-            char7 = self.char.create({
-                    'char': u'é',
-                    })
+            char7, = self.char.create([{
+                        'char': u'é',
+                        }])
             self.assert_(char7)
             self.assertEqual(char7.char, u'é')
 
@@ -1053,15 +1056,13 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0060text(self):
-        '''
-        Test Text.
-        '''
+        'Test Text'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             for text in (self.text_translate, self.text):
-                text1 = text.create({
-                        'text': 'Test',
-                        })
+                text1, = text.create([{
+                            'text': 'Test',
+                            }])
                 self.assert_(text1)
                 self.assertEqual(text1.text, 'Test')
 
@@ -1215,9 +1216,9 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(texts, [text1])
 
-                text2 = text.create({
-                        'text': None,
-                        })
+                text2, = text.create([{
+                            'text': None,
+                            }])
                 self.assert_(text2)
                 self.assertEqual(text2.text, None)
 
@@ -1236,11 +1237,11 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(texts, [])
 
-            text3 = self.text.create({})
+            text3, = self.text.create([{}])
             self.assert_(text3)
             self.assertEqual(text3.text, None)
 
-            text4 = self.text_default.create({})
+            text4, = self.text_default.create([{}])
             self.assert_(text4)
             self.assertEqual(text4.text, 'Test')
 
@@ -1254,35 +1255,35 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(text2.text, 'Test')
 
-            self.assertRaises(Exception, self.text_required.create, {})
+            self.assertRaises(Exception, self.text_required.create, [{}])
             transaction.cursor.rollback()
 
-            text5 = self.text_required.create({
-                    'text': 'Test',
-                    })
+            text5, = self.text_required.create([{
+                        'text': 'Test',
+                        }])
             self.assert_(text5)
 
-            text6 = self.text_size.create({
-                    'text': 'Test',
-                    })
+            text6, = self.text_size.create([{
+                        'text': 'Test',
+                        }])
             self.assert_(text6)
 
-            self.assertRaises(Exception, self.text_size.create, {
-                    'text': 'foobar',
-                    })
+            self.assertRaises(Exception, self.text_size.create, [{
+                        'text': 'foobar',
+                        }])
 
             self.assertRaises(Exception, self.text_size.write, [text6], {
                     'text': 'foobar',
                     })
 
-            text7 = self.text.create({
-                    'text': 'Foo\nBar',
-                    })
+            text7, = self.text.create([{
+                        'text': 'Foo\nBar',
+                        }])
             self.assert_(text7)
 
-            text8 = self.text.create({
-                    'text': u'é',
-                    })
+            text8, = self.text.create([{
+                        'text': u'é',
+                        }])
             self.assert_(text8)
             self.assertEqual(text8.text, u'é')
 
@@ -1304,14 +1305,12 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0070sha(self):
-        '''
-        Test Sha.
-        '''
+        'Test Sha'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            sha1 = self.sha.create({
-                    'sha': 'Test',
-                    })
+            sha1, = self.sha.create([{
+                        'sha': 'Test',
+                        }])
             self.assert_(sha1)
             self.assertEqual(sha1.sha,
                 '640ab2bae07bedc4c163f679a746f7ab7fb5d1fa')
@@ -1421,9 +1420,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(sha, [sha1])
 
-            sha2 = self.sha.create({
-                    'sha': None,
-                    })
+            sha2, = self.sha.create([{
+                        'sha': None,
+                        }])
             self.assert_(sha2)
             self.assertEqual(sha2.sha, None)
 
@@ -1442,11 +1441,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(sha, [])
 
-            sha3 = self.sha.create({})
+            sha3, = self.sha.create([{}])
             self.assert_(sha3)
             self.assertEqual(sha3.sha, None)
 
-            sha4 = self.sha_default.create({})
+            sha4, = self.sha_default.create([{}])
             self.assert_(sha4)
             self.assertEqual(sha4.sha,
                 'ba79baeb9f10896a46ae74715271b7f586e74640')
@@ -1462,17 +1461,17 @@ class FieldsTestCase(unittest.TestCase):
             self.assertEqual(sha2.sha,
                 '640ab2bae07bedc4c163f679a746f7ab7fb5d1fa')
 
-            self.assertRaises(Exception, self.sha_required.create, {})
+            self.assertRaises(Exception, self.sha_required.create, [{}])
             transaction.cursor.rollback()
 
-            sha5 = self.sha_required.create({
-                    'sha': 'Test',
-                    })
+            sha5, = self.sha_required.create([{
+                        'sha': 'Test',
+                        }])
             self.assert_(sha5)
 
-            sha6 = self.sha.create({
-                    'sha': u'é',
-                    })
+            sha6, = self.sha.create([{
+                        'sha': u'é',
+                        }])
             self.assert_(sha6)
             self.assertEqual(sha6.sha,
                 u'bf15be717ac1b080b4f1c456692825891ff5073d')
@@ -1496,9 +1495,7 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
     def test0080date(self):
-        '''
-        Test Date.
-        '''
+        'Test Date'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             today = datetime.date(2009, 1, 1)
@@ -1506,9 +1503,9 @@ class FieldsTestCase(unittest.TestCase):
             yesterday = today - datetime.timedelta(1)
             default_date = datetime.date(2000, 1, 1)
 
-            date1 = self.date.create({
-                    'date': today,
-                    })
+            date1, = self.date.create([{
+                        'date': today,
+                        }])
             self.assert_(date1)
             self.assertEqual(date1.date, today)
 
@@ -1642,9 +1639,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(dates, [date1])
 
-            date2 = self.date.create({
-                    'date': yesterday,
-                    })
+            date2, = self.date.create([{
+                        'date': yesterday,
+                        }])
             self.assert_(date2)
             self.assertEqual(date2.date, yesterday)
 
@@ -1663,11 +1660,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(dates, [])
 
-            date3 = self.date.create({})
+            date3, = self.date.create([{}])
             self.assert_(date3)
             self.assertEqual(date3.date, None)
 
-            date4 = self.date_default.create({})
+            date4, = self.date_default.create([{}])
             self.assert_(date4)
             self.assertEqual(date4.date, default_date)
 
@@ -1681,68 +1678,66 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(date2.date, today)
 
-            self.assertRaises(Exception, self.date.create, {
-                    'date': 'test',
-                    })
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': 'test',
+                        }])
 
             self.assertRaises(Exception, self.date.write, [date1], {
                     'date': 'test',
                     })
 
-            self.assertRaises(Exception, self.date.create, {
-                    'date': 1,
-                    })
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': 1,
+                        }])
 
             self.assertRaises(Exception, self.date.write, [date1], {
                     'date': 1,
                     })
 
-            self.assertRaises(Exception, self.date.create, {
-                    'date': datetime.datetime.now(),
-                    })
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': datetime.datetime.now(),
+                        }])
 
             self.assertRaises(Exception, self.date.write, [date1], {
                     'date': datetime.datetime.now(),
                     })
 
-            self.assertRaises(Exception, self.date.create, {
-                    'date': '2009-13-01',
-                    })
+            self.assertRaises(Exception, self.date.create, [{
+                        'date': '2009-13-01',
+                        }])
 
             self.assertRaises(Exception, self.date.write, [date1], {
                     'date': '2009-02-29',
                     })
 
-            date5 = self.date.create({
-                    'date': '2009-01-01',
-                    })
+            date5, = self.date.create([{
+                        'date': '2009-01-01',
+                        }])
             self.assert_(date5)
             self.assertEqual(date5.date, datetime.date(2009, 1, 1))
 
-            self.assertRaises(Exception, self.date_required.create, {})
+            self.assertRaises(Exception, self.date_required.create, [{}])
             transaction.cursor.rollback()
 
-            date6 = self.date_required.create({
-                    'date': today,
-                    })
+            date6, = self.date_required.create([{
+                        'date': today,
+                        }])
             self.assert_(date6)
 
-            date7 = self.date.create({
-                    'date': None,
-                    })
+            date7, = self.date.create([{
+                        'date': None,
+                        }])
             self.assert_(date7)
 
-            date8 = self.date.create({
-                    'date': None,
-                    })
+            date8, = self.date.create([{
+                        'date': None,
+                        }])
             self.assert_(date8)
 
             transaction.cursor.rollback()
 
     def test0090datetime(self):
-        '''
-        Test DateTime.
-        '''
+        'Test DateTime'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             today = datetime.datetime(2009, 1, 1, 12, 0, 0)
@@ -1750,9 +1745,9 @@ class FieldsTestCase(unittest.TestCase):
             yesterday = today - datetime.timedelta(1)
             default_datetime = datetime.datetime(2000, 1, 1, 12, 0, 0)
 
-            datetime1 = self.datetime.create({
-                    'datetime': today,
-                    })
+            datetime1, = self.datetime.create([{
+                        'datetime': today,
+                        }])
             self.assert_(datetime1)
             self.assertEqual(datetime1.datetime, today)
 
@@ -1886,9 +1881,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(datetimes, [datetime1])
 
-            datetime2 = self.datetime.create({
-                    'datetime': yesterday,
-                    })
+            datetime2, = self.datetime.create([{
+                        'datetime': yesterday,
+                        }])
             self.assert_(datetime2)
             self.assertEqual(datetime2.datetime, yesterday)
 
@@ -1907,11 +1902,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(datetimes, [])
 
-            datetime3 = self.datetime.create({})
+            datetime3, = self.datetime.create([{}])
             self.assert_(datetime3)
             self.assertEqual(datetime3.datetime, None)
 
-            datetime4 = self.datetime_default.create({})
+            datetime4, = self.datetime_default.create([{}])
             self.assert_(datetime4)
             self.assertEqual(datetime4.datetime, default_datetime)
 
@@ -1925,36 +1920,36 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(datetime2.datetime, today)
 
-            self.assertRaises(Exception, self.datetime.create, {
-                    'datetime': 'test',
-                    })
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': 'test',
+                        }])
 
             self.assertRaises(Exception, self.datetime.write, [datetime1],
                 {
                     'datetime': 'test',
                     })
 
-            self.assertRaises(Exception, self.datetime.create, {
-                    'datetime': 1,
-                    })
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': 1,
+                        }])
 
             self.assertRaises(Exception, self.datetime.write, [datetime1],
                 {
                     'datetime': 1,
                     })
 
-            self.assertRaises(Exception, self.datetime.create, {
-                    'datetime': datetime.date.today(),
-                    })
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': datetime.date.today(),
+                        }])
 
             self.assertRaises(Exception, self.datetime.write, [datetime1],
                 {
                     'datetime': datetime.date.today(),
                     })
 
-            self.assertRaises(Exception, self.datetime.create, {
-                    'datetime': '2009-13-01 12:30:00',
-                    })
+            self.assertRaises(Exception, self.datetime.create, [{
+                        'datetime': '2009-13-01 12:30:00',
+                        }])
 
             self.assertRaises(Exception, self.datetime.write, [datetime1],
                 {
@@ -1966,51 +1961,49 @@ class FieldsTestCase(unittest.TestCase):
                     'datetime': '2009-01-01 25:00:00',
                     })
 
-            datetime5 = self.datetime.create({
+            datetime5, = self.datetime.create([{
                     'datetime': '2009-01-01 12:00:00',
-                    })
+                    }])
             self.assert_(datetime5)
             self.assertEqual(datetime5.datetime,
                 datetime.datetime(2009, 1, 1, 12, 0, 0))
 
-            self.assertRaises(Exception, self.datetime_required.create, {})
+            self.assertRaises(Exception, self.datetime_required.create, [{}])
             transaction.cursor.rollback()
 
-            datetime6 = self.datetime_required.create({
-                    'datetime': today,
-                    })
+            datetime6, = self.datetime_required.create([{
+                        'datetime': today,
+                        }])
             self.assert_(datetime6)
 
-            datetime7 = self.datetime.create({
-                    'datetime': None,
-                    })
+            datetime7, = self.datetime.create([{
+                        'datetime': None,
+                        }])
             self.assert_(datetime7)
 
-            datetime8 = self.datetime.create({
-                    'datetime': None,
-                    })
+            datetime8, = self.datetime.create([{
+                        'datetime': None,
+                        }])
             self.assert_(datetime8)
 
-            datetime9 = self.datetime.create({
-                    'datetime': today.replace(microsecond=1),
-                    })
+            datetime9, = self.datetime.create([{
+                        'datetime': today.replace(microsecond=1),
+                        }])
             self.assert_(datetime9)
             self.assertEqual(datetime9.datetime, today)
 
             # Test format
-            self.assert_(self.datetime_format.create({
-                        'datetime': datetime.datetime(2009, 1, 1, 12, 30),
-                        }))
-            self.assertRaises(Exception, self.datetime_format.create, {
-                    'datetime': datetime.datetime(2009, 1, 1, 12, 30, 25),
-                    })
+            self.assert_(self.datetime_format.create([{
+                            'datetime': datetime.datetime(2009, 1, 1, 12, 30),
+                            }]))
+            self.assertRaises(Exception, self.datetime_format.create, [{
+                        'datetime': datetime.datetime(2009, 1, 1, 12, 30, 25),
+                        }])
 
             transaction.cursor.rollback()
 
     def test0100time(self):
-        '''
-        Test Time.
-        '''
+        'Test Time'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             pre_evening = datetime.time(16, 30)
@@ -2018,9 +2011,9 @@ class FieldsTestCase(unittest.TestCase):
             night = datetime.time(20, 00)
             default_time = datetime.time(16, 30)
 
-            time1 = self.time.create({
-                    'time': evening,
-                    })
+            time1, = self.time.create([{
+                        'time': evening,
+                        }])
             self.assert_(time1)
             self.assertEqual(time1.time, evening)
 
@@ -2154,9 +2147,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(times, [time1])
 
-            time2 = self.time.create({
-                    'time': pre_evening,
-                    })
+            time2, = self.time.create([{
+                        'time': pre_evening,
+                        }])
             self.assert_(time2)
             self.assertEqual(time2.time, pre_evening)
 
@@ -2175,11 +2168,11 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(times, [])
 
-            time3 = self.time.create({})
+            time3, = self.time.create([{}])
             self.assert_(time3)
             self.assertEqual(time3.time, None)
 
-            time4 = self.time_default.create({})
+            time4, = self.time_default.create([{}])
             self.assert_(time4)
             self.assertEqual(time4.time, default_time)
 
@@ -2193,18 +2186,18 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(time2.time, evening)
 
-            self.assertRaises(Exception, self.time.create, {
-                    'time': 'test',
-                    })
+            self.assertRaises(Exception, self.time.create, [{
+                        'time': 'test',
+                        }])
 
             self.assertRaises(Exception, self.time.write, [time1],
                 {
                     'time': 'test',
                     })
 
-            self.assertRaises(Exception, self.time.create, {
+            self.assertRaises(Exception, self.time.create, [{
                     'time': 1,
-                    })
+                    }])
 
             self.assertRaises(Exception, self.time.write, [time1],
                 {
@@ -2216,59 +2209,52 @@ class FieldsTestCase(unittest.TestCase):
                     'time': '25:00:00',
                     })
 
-            time5 = self.time.create({
-                    'time': '12:00:00',
-                    })
+            time5, = self.time.create([{
+                        'time': '12:00:00',
+                        }])
             self.assert_(time5)
             self.assertEqual(time5.time, datetime.time(12, 0))
 
-            self.assertRaises(Exception, self.time_required.create, {})
+            self.assertRaises(Exception, self.time_required.create, [{}])
             transaction.cursor.rollback()
 
-            time6 = self.time_required.create({
-                    'time': evening,
-                    })
+            time6, = self.time_required.create([{
+                        'time': evening,
+                        }])
             self.assert_(time6)
 
-            time7 = self.time.create({
-                    'time': None,
-                    })
+            time7, = self.time.create([{
+                        'time': None,
+                        }])
             self.assert_(time7)
 
-            time8 = self.time.create({
-                    'time': False,
-                    })
-            self.assert_(time8)
-
-            time9 = self.time.create({
-                    'time': evening.replace(microsecond=1),
-                    })
+            time9, = self.time.create([{
+                        'time': evening.replace(microsecond=1),
+                        }])
             self.assert_(time9)
             self.assertEqual(time9.time, evening)
 
             # Test format
-            self.assert_(self.time_format.create({
+            self.assert_(self.time_format.create([{
                         'time': datetime.time(12, 30),
-                        }))
-            self.assertRaises(Exception, self.time_format.create, {
+                        }]))
+            self.assertRaises(Exception, self.time_format.create, [{
                     'time': datetime.time(12, 30, 25),
-                    })
+                    }])
 
             transaction.cursor.rollback()
 
     def test0110one2one(self):
-        '''
-        Test One2One.
-        '''
+        'Test One2One'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            target1 = self.one2one_target.create({
-                    'name': 'target1',
-                    })
-            one2one1 = self.one2one.create({
-                    'name': 'origin1',
-                    'one2one': target1.id,
-                    })
+            target1, = self.one2one_target.create([{
+                        'name': 'target1',
+                        }])
+            one2one1, = self.one2one.create([{
+                        'name': 'origin1',
+                        'one2one': target1.id,
+                        }])
             self.assert_(one2one1)
             self.assertEqual(one2one1.one2one, target1)
 
@@ -2315,9 +2301,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(one2ones, [])
 
-            one2one2 = self.one2one.create({
-                    'name': 'origin2',
-                    })
+            one2one2, = self.one2one.create([{
+                        'name': 'origin2',
+                        }])
             self.assert_(one2one2)
             self.assertEqual(one2one2.one2one, None)
 
@@ -2326,9 +2312,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(one2ones, [one2one2])
 
-            target2 = self.one2one_target.create({
-                    'name': 'target2',
-                    })
+            target2, = self.one2one_target.create([{
+                        'name': 'target2',
+                        }])
             self.one2one.write([one2one2], {
                     'one2one': target2.id,
                     })
@@ -2339,10 +2325,10 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(one2one2.one2one, None)
 
-            self.assertRaises(Exception, self.one2one.create, {
-                    'name': 'one2one3',
-                    'one2one': target1.id,
-                    })
+            self.assertRaises(Exception, self.one2one.create, [{
+                        'name': 'one2one3',
+                        'one2one': target1.id,
+                        }])
             transaction.cursor.rollback()
 
             self.assertRaises(Exception, self.one2one.write, [one2one2], {
@@ -2350,41 +2336,56 @@ class FieldsTestCase(unittest.TestCase):
                     })
             transaction.cursor.rollback()
 
-            self.assertRaises(Exception, self.one2one_required.create, {
-                    'name': 'one2one3',
-                    })
+            self.assertRaises(Exception, self.one2one_required.create, [{
+                        'name': 'one2one3',
+                        }])
             transaction.cursor.rollback()
 
-            target3 = self.one2one_target.create({
-                    'name': 'target3',
-                    })
+            target3, = self.one2one_target.create([{
+                        'name': 'target3',
+                        }])
 
-            one2one3 = self.one2one_required.create({
-                    'name': 'one2one3',
-                    'one2one': target3.id,
-                    })
+            one2one3, = self.one2one_required.create([{
+                        'name': 'one2one3',
+                        'one2one': target3.id,
+                        }])
             self.assert_(one2one3)
+
+            target4, = self.one2one_target.create([{
+                        'name': 'target4',
+                        }])
+            self.assertRaises(Exception, self.one2one_domain.create, [{
+                        'name': 'one2one4',
+                        'one2one': target4.id,
+                        }])
+            transaction.cursor.rollback()
+
+            target5, = self.one2one_target.create([{
+                        'name': 'domain',
+                        }])
+            one2one5, = self.one2one_domain.create([{
+                        'name': 'one2one5',
+                        'one2one': target5.id,
+                        }])
 
             transaction.cursor.rollback()
 
     def test0120one2many(self):
-        '''
-        Test One2Many.
-        '''
+        'Test One2Many'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             for one2many, one2many_target in (
                     (self.one2many, self.one2many_target),
                     (self.one2many_reference, self.one2many_reference_target),
                     ):
-                one2many1 = one2many.create({
-                        'name': 'origin1',
-                        'targets': [
-                            ('create', {
-                                    'name': 'target1',
-                                    }),
-                            ],
-                        })
+                one2many1, = one2many.create([{
+                            'name': 'origin1',
+                            'targets': [
+                                ('create', [{
+                                            'name': 'target1',
+                                            }]),
+                                ],
+                            }])
                 self.assert_(one2many1)
 
                 self.assertEqual(len(one2many1.targets), 1)
@@ -2436,9 +2437,9 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(one2manys, [])
 
-                one2many2 = one2many.create({
-                        'name': 'origin2',
-                        })
+                one2many2, = one2many.create([{
+                            'name': 'origin2',
+                            }])
                 self.assert_(one2many2)
 
                 self.assertEqual(one2many2.targets, ())
@@ -2457,9 +2458,9 @@ class FieldsTestCase(unittest.TestCase):
                         })
                 self.assertEqual(target1.name, 'target1bis')
 
-                target2 = one2many_target.create({
-                        'name': 'target2',
-                        })
+                target2, = one2many_target.create([{
+                            'name': 'target2',
+                            }])
                 one2many.write([one2many1], {
                         'targets': [
                             ('add', [target2.id]),
@@ -2470,7 +2471,7 @@ class FieldsTestCase(unittest.TestCase):
 
                 one2many.write([one2many1], {
                         'targets': [
-                            ('unlink', [target2.id]),
+                            ('remove', [target2.id]),
                             ],
                         })
                 self.assertEqual(one2many1.targets, (target1,))
@@ -2481,7 +2482,7 @@ class FieldsTestCase(unittest.TestCase):
 
                 one2many.write([one2many1], {
                         'targets': [
-                            ('unlink_all',),
+                            ('remove', [target1.id]),
                             ],
                         })
                 self.assertEqual(one2many1.targets, ())
@@ -2492,7 +2493,7 @@ class FieldsTestCase(unittest.TestCase):
 
                 one2many.write([one2many1], {
                         'targets': [
-                            ('set', [target1.id, target2.id]),
+                            ('add', [target1.id, target2.id]),
                             ],
                         })
                 self.assertEqual(one2many1.targets,
@@ -2500,7 +2501,32 @@ class FieldsTestCase(unittest.TestCase):
 
                 one2many.write([one2many1], {
                         'targets': [
-                            ('delete', [target2.id]),
+                            ('copy', [target1.id], {'name': 'copy1'}),
+                            ],
+                        })
+                targets = one2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 1)
+                self.assertEqual(targets[0].name, 'copy1')
+
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('copy', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(len(one2many1.targets), 4)
+                targets = one2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 2)
+                names = set([target.name for target in targets])
+                self.assertEqual(names, set(('copy1', 'target2')))
+
+                copy_ids = [target.id for target in targets]
+                one2many.write([one2many1], {
+                        'targets': [
+                            ('delete', [target2.id] + copy_ids),
                             ],
                         })
                 self.assertEqual(one2many1.targets, (target1,))
@@ -2509,55 +2535,42 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(targets, [])
 
-                one2many.write([one2many1], {
-                        'targets': [
-                            ('delete_all',),
-                            ],
-                        })
-                self.assertEqual(one2many1.targets, ())
-                targets = one2many_target.search([
-                        ('id', '=', target1.id),
-                        ])
-                self.assertEqual(targets, [])
-
                 transaction.cursor.rollback()
 
-            self.assertRaises(Exception, self.one2many_required.create, {
-                    'name': 'origin3',
-                    })
+            self.assertRaises(Exception, self.one2many_required.create, [{
+                        'name': 'origin3',
+                        }])
             transaction.cursor.rollback()
 
-            origin3_id = self.one2many_required.create({
-                    'name': 'origin3',
-                    'targets': [
-                        ('create', {
-                                'name': 'target3',
-                                }),
-                        ],
-                    })
+            origin3_id, = self.one2many_required.create([{
+                        'name': 'origin3',
+                        'targets': [
+                            ('create', [{
+                                        'name': 'target3',
+                                        }]),
+                            ],
+                        }])
             self.assert_(origin3_id)
 
-            self.one2many_size.create({
-                    'targets': [('create', {})] * 3,
-                    })
-            self.assertRaises(Exception, self.one2many_size.create, {
-                    'targets': [('create', {})] * 4,
-                    })
-            self.one2many_size_pyson.create({
-                    'limit': 4,
-                    'targets': [('create', {})] * 4,
-                    })
-            self.assertRaises(Exception, self.one2many_size_pyson.create, {
-                    'limit': 2,
-                    'targets': [('create', {})] * 4,
-                    })
+            self.one2many_size.create([{
+                        'targets': [('create', [{}])] * 3,
+                        }])
+            self.assertRaises(Exception, self.one2many_size.create, [{
+                        'targets': [('create', [{}])] * 4,
+                        }])
+            self.one2many_size_pyson.create([{
+                        'limit': 4,
+                        'targets': [('create', [{}])] * 4,
+                        }])
+            self.assertRaises(Exception, self.one2many_size_pyson.create, [{
+                        'limit': 2,
+                        'targets': [('create', [{}])] * 4,
+                        }])
 
             transaction.cursor.rollback()
 
     def test0130many2many(self):
-        '''
-        Test Many2Many.
-        '''
+        'Test Many2Many'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             for many2many, many2many_target in (
@@ -2565,14 +2578,14 @@ class FieldsTestCase(unittest.TestCase):
                     (self.many2many_reference,
                         self.many2many_reference_target),
                     ):
-                many2many1 = many2many.create({
-                        'name': 'origin1',
-                        'targets': [
-                            ('create', {
-                                    'name': 'target1',
-                                    }),
-                            ],
-                        })
+                many2many1, = many2many.create([{
+                            'name': 'origin1',
+                            'targets': [
+                                ('create', [{
+                                            'name': 'target1',
+                                            }]),
+                                ],
+                            }])
                 self.assert_(many2many1)
 
                 self.assertEqual(len(many2many1.targets), 1)
@@ -2618,9 +2631,9 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(many2manys, [])
 
-                many2many2 = many2many.create({
-                        'name': 'origin2',
-                        })
+                many2many2, = many2many.create([{
+                            'name': 'origin2',
+                            }])
                 self.assert_(many2many2)
 
                 self.assertEqual(many2many2.targets, ())
@@ -2639,9 +2652,9 @@ class FieldsTestCase(unittest.TestCase):
                         })
                 self.assertEqual(target1.name, 'target1bis')
 
-                target2 = many2many_target.create({
-                        'name': 'target2',
-                        })
+                target2, = many2many_target.create([{
+                            'name': 'target2',
+                            }])
                 many2many.write([many2many1], {
                         'targets': [
                             ('add', [target2.id]),
@@ -2652,7 +2665,7 @@ class FieldsTestCase(unittest.TestCase):
 
                 many2many.write([many2many1], {
                         'targets': [
-                            ('unlink', [target2.id]),
+                            ('remove', [target2.id]),
                             ],
                         })
                 self.assertEqual(many2many1.targets, (target1,))
@@ -2663,7 +2676,7 @@ class FieldsTestCase(unittest.TestCase):
 
                 many2many.write([many2many1], {
                         'targets': [
-                            ('unlink_all',),
+                            ('remove', [target1.id]),
                             ],
                         })
                 self.assertEqual(many2many1.targets, ())
@@ -2674,7 +2687,7 @@ class FieldsTestCase(unittest.TestCase):
 
                 many2many.write([many2many1], {
                         'targets': [
-                            ('set', [target1.id, target2.id]),
+                            ('add', [target1.id, target2.id]),
                             ],
                         })
                 self.assertEqual(many2many1.targets,
@@ -2682,7 +2695,32 @@ class FieldsTestCase(unittest.TestCase):
 
                 many2many.write([many2many1], {
                         'targets': [
-                            ('delete', [target2.id]),
+                            ('copy', [target1.id], {'name': 'copy1'}),
+                            ],
+                        })
+                targets = many2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 1)
+                self.assertEqual(targets[0].name, 'copy1')
+
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('copy', [target2.id]),
+                            ],
+                        })
+                self.assertEqual(len(many2many1.targets), 4)
+                targets = many2many_target.search([
+                        ('id', 'not in', [target1.id, target2.id]),
+                        ])
+                self.assertEqual(len(targets), 2)
+                names = set([target.name for target in targets])
+                self.assertEqual(names, set(('copy1', 'target2')))
+
+                copy_ids = [target.id for target in targets]
+                many2many.write([many2many1], {
+                        'targets': [
+                            ('delete', [target2.id] + copy_ids),
                             ],
                         })
                 self.assertEqual(many2many1.targets, (target1,))
@@ -2691,61 +2729,40 @@ class FieldsTestCase(unittest.TestCase):
                         ])
                 self.assertEqual(targets, [])
 
-                many2many.write([many2many1], {
-                        'targets': [
-                            ('delete_all',),
-                            ],
-                        })
-                self.assertEqual(many2many1.targets, ())
-                targets = many2many_target.search([
-                        ('id', '=', target1.id),
-                        ])
-                self.assertEqual(targets, [])
-
                 transaction.cursor.rollback()
 
-            self.assertRaises(Exception, self.many2many_required.create, {
-                    'name': 'origin3',
-                    })
+            self.assertRaises(Exception, self.many2many_required.create, [{
+                        'name': 'origin3',
+                        }])
             transaction.cursor.rollback()
 
-            origin3_id = self.many2many_required.create({
-                    'name': 'origin3',
-                    'targets': [
-                        ('create', {
-                                'name': 'target3',
-                                }),
-                        ],
-                    })
+            origin3_id, = self.many2many_required.create([{
+                        'name': 'origin3',
+                        'targets': [
+                            ('create', [{
+                                        'name': 'target3',
+                                        }]),
+                            ],
+                        }])
             self.assert_(origin3_id)
 
-            size_targets = [
-                self.many2many_size_target.create({
+            size_targets = self.many2many_size_target.create([{
                         'name': str(i),
-                        }) for i in range(6)]
-
-            self.many2many_size.create({
-                    'targets': [('set', size_targets[:5])],
-                    })
-            self.assertRaises(Exception, self.many2many_size.create, {
-                    'targets': [('set', size_targets)],
-                    })
+                        } for i in range(6)])
 
             transaction.cursor.rollback()
 
     def test0140reference(self):
-        '''
-        Test Reference.
-        '''
+        'Test Reference'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
-            target1 = self.reference_target.create({
-                    'name': 'target1',
-                    })
-            reference1 = self.reference.create({
-                    'name': 'reference1',
-                    'reference': str(target1),
-                    })
+            target1, = self.reference_target.create([{
+                        'name': 'target1',
+                        }])
+            reference1, = self.reference.create([{
+                        'name': 'reference1',
+                        'reference': str(target1),
+                        }])
             self.assert_(reference1)
 
             self.assertEqual(reference1.reference, target1)
@@ -2756,12 +2773,18 @@ class FieldsTestCase(unittest.TestCase):
             self.assertEqual(references, [reference1])
 
             references = self.reference.search([
-                    ('reference', '=', str(target1)),
+                    ('reference', '=', (target1.__name__, target1.id)),
                     ])
             self.assertEqual(references, [reference1])
 
             references = self.reference.search([
-                    ('reference', '=', str(target1)),
+                    ('reference', '=', [target1.__name__, target1.id]),
+                    ])
+            self.assertEqual(references, [reference1])
+
+            references = self.reference.search([
+                    ('reference.name', '=', 'target1',
+                        'test.reference.target'),
                     ])
             self.assertEqual(references, [reference1])
 
@@ -2807,9 +2830,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(references, [reference1])
 
-            reference2 = self.reference.create({
-                    'name': 'reference2',
-                    })
+            reference2, = self.reference.create([{
+                        'name': 'reference2',
+                        }])
             self.assert_(reference2)
 
             self.assertEqual(reference2.reference, None)
@@ -2819,9 +2842,9 @@ class FieldsTestCase(unittest.TestCase):
                     ])
             self.assertEqual(references, [reference2])
 
-            target2 = self.reference_target.create({
-                    'name': 'target2',
-                    })
+            target2, = self.reference_target.create([{
+                        'name': 'target2',
+                        }])
 
             self.reference.write([reference2], {
                     'reference': str(target2),
@@ -2838,46 +2861,44 @@ class FieldsTestCase(unittest.TestCase):
                     })
             self.assertEqual(reference2.reference, target2)
 
-            reference3 = self.reference.create({
-                    'name': 'reference3',
-                    'reference': ('test.reference.target', target1.id),
-                    })
+            reference3, = self.reference.create([{
+                        'name': 'reference3',
+                        'reference': ('test.reference.target', target1.id),
+                        }])
             self.assert_(reference3)
 
-            self.assertRaises(Exception, self.reference_required.create, {
-                    'name': 'reference4',
-                    })
+            self.assertRaises(Exception, self.reference_required.create, [{
+                        'name': 'reference4',
+                        }])
             transaction.cursor.rollback()
 
-            target4 = self.reference_target.create({
-                    'name': 'target4_id',
-                    })
+            target4, = self.reference_target.create([{
+                        'name': 'target4_id',
+                        }])
 
-            reference4 = self.reference_required.create({
-                    'name': 'reference4',
-                    'reference': str(target4),
-                    })
+            reference4, = self.reference_required.create([{
+                        'name': 'reference4',
+                        'reference': str(target4),
+                        }])
             self.assert_(reference4)
 
             transaction.cursor.rollback()
 
     def test0150property(self):
-        '''
-        Test Property with supported field types.
-        '''
+        'Test Property with supported field types'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
 
             # Test Char
-            prop_a = self.property_.create({'char': 'Test'})
+            prop_a, = self.property_.create([{'char': 'Test'}])
             self.assert_(prop_a)
             self.assertEqual(prop_a.char, 'Test')
 
-            prop_b = self.property_.create({})
+            prop_b, = self.property_.create([{}])
             self.assert_(prop_b)
             self.assertEqual(prop_b.char, None)
 
-            prop_c = self.property_.create({'char': 'FooBar'})
+            prop_c, = self.property_.create([{'char': 'FooBar'}])
             self.assert_(prop_c)
             self.assertEqual(prop_c.char, 'FooBar')
 
@@ -2924,12 +2945,12 @@ class FieldsTestCase(unittest.TestCase):
                     ('model.model', '=', 'test.property'),
                     ('name', '=', 'char'),
                     ], limit=1)
-            self.ir_property.create({
-                    'field': property_field.id,
-                    'value': ',DEFAULT_VALUE',
-                    })
+            self.ir_property.create([{
+                        'field': property_field.id,
+                        'value': ',DEFAULT_VALUE',
+                        }])
 
-            prop_d = self.property_.create({})
+            prop_d, = self.property_.create([{}])
             self.assert_(prop_d)
             self.assertEqual(prop_d.char, 'DEFAULT_VALUE')
 
@@ -2945,21 +2966,21 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
             # Test Many2One
-            char_a = self.char.create({'char': 'Test'})
+            char_a, = self.char.create([{'char': 'Test'}])
             self.assert_(char_a)
 
-            char_b = self.char.create({'char': 'FooBar'})
+            char_b, = self.char.create([{'char': 'FooBar'}])
             self.assert_(char_b)
 
-            prop_a = self.property_.create({'many2one': char_a.id})
+            prop_a, = self.property_.create([{'many2one': char_a.id}])
             self.assert_(prop_a)
             self.assertEqual(prop_a.many2one, char_a)
 
-            prop_b = self.property_.create({'many2one': char_b.id})
+            prop_b, = self.property_.create([{'many2one': char_b.id}])
             self.assert_(prop_b)
             self.assertEqual(prop_b.many2one, char_b)
 
-            prop_c = self.property_.create({})
+            prop_c, = self.property_.create([{}])
             self.assert_(prop_c)
             self.assertEqual(prop_c.many2one, None)
 
@@ -2988,15 +3009,15 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
             # Test Numeric
-            prop_a = self.property_.create({'numeric': Decimal('1.1')})
+            prop_a, = self.property_.create([{'numeric': Decimal('1.1')}])
             self.assert_(prop_a)
             self.assertEqual(prop_a.numeric, Decimal('1.1'))
 
-            prop_b = self.property_.create({'numeric': Decimal('2.6')})
+            prop_b, = self.property_.create([{'numeric': Decimal('2.6')}])
             self.assert_(prop_b)
             self.assertEqual(prop_b.numeric, Decimal('2.6'))
 
-            prop_c = self.property_.create({})
+            prop_c, = self.property_.create([{}])
             self.assert_(prop_c)
             self.assertEqual(prop_c.numeric, None)
 
@@ -3054,12 +3075,12 @@ class FieldsTestCase(unittest.TestCase):
                     ('model.model', '=', 'test.property'),
                     ('name', '=', 'numeric'),
                     ], limit=1)
-            self.ir_property.create({
-                    'field': property_field.id,
-                    'value': ',3.7',
-                    })
+            self.ir_property.create([{
+                        'field': property_field.id,
+                        'value': ',3.7',
+                        }])
 
-            prop_d = self.property_.create({})
+            prop_d, = self.property_.create([{}])
             self.assert_(prop_d)
             self.assertEqual(prop_d.numeric, Decimal('3.7'))
 
@@ -3072,15 +3093,15 @@ class FieldsTestCase(unittest.TestCase):
             transaction.cursor.rollback()
 
             # Test Selection
-            prop_a = self.property_.create({'selection': 'option_a'})
+            prop_a, = self.property_.create([{'selection': 'option_a'}])
             self.assert_(prop_a)
             self.assertEqual(prop_a.selection, 'option_a')
 
-            prop_b = self.property_.create({'selection': 'option_b'})
+            prop_b, = self.property_.create([{'selection': 'option_b'}])
             self.assert_(prop_b)
             self.assertEqual(prop_b.selection, 'option_b')
 
-            prop_c = self.property_.create({})
+            prop_c, = self.property_.create([{}])
             self.assert_(prop_c)
             self.assertEqual(prop_c.selection, None)
 
@@ -3113,12 +3134,12 @@ class FieldsTestCase(unittest.TestCase):
                     ('model.model', '=', 'test.property'),
                     ('name', '=', 'selection'),
                     ], limit=1)
-            self.ir_property.create({
-                    'field': property_field.id,
-                    'value': ',option_a',
-                    })
+            self.ir_property.create([{
+                        'field': property_field.id,
+                        'value': ',option_a',
+                        }])
 
-            prop_d = self.property_.create({})
+            prop_d, = self.property_.create([{}])
             self.assert_(prop_d)
             self.assertEqual(prop_d.selection, 'option_a')
 
@@ -3130,10 +3151,141 @@ class FieldsTestCase(unittest.TestCase):
 
             transaction.cursor.rollback()
 
+    def test0160selection(self):
+        'Test Selection'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            selection1, = self.selection.create([{'select': 'arabic'}])
+            self.assert_(selection1)
+            self.assertEqual(selection1.select, 'arabic')
+
+            selection2, = self.selection.create([{'select': None}])
+            self.assert_(selection2)
+            self.assertEqual(selection2.select, None)
+
+            self.assertRaises(Exception, self.selection.create,
+                [{'select': 'chinese'}])
+
+            selection3, = self.selection.create(
+                [{'select': 'arabic', 'dyn_select': '1'}])
+            self.assert_(selection3)
+            self.assertEqual(selection3.select, 'arabic')
+            self.assertEqual(selection3.dyn_select, '1')
+
+            selection4, = self.selection.create(
+                [{'select': 'hexa', 'dyn_select': '0x3'}])
+            self.assert_(selection4)
+            self.assertEqual(selection4.select, 'hexa')
+            self.assertEqual(selection4.dyn_select, '0x3')
+
+            selection5, = self.selection.create(
+                [{'select': 'hexa', 'dyn_select': None}])
+            self.assert_(selection5)
+            self.assertEqual(selection5.select, 'hexa')
+            self.assertEqual(selection5.dyn_select, None)
+
+            self.assertRaises(Exception, self.selection.create,
+                [{'select': 'arabic', 'dyn_select': '0x3'}])
+            self.assertRaises(Exception, self.selection.create,
+                [{'select': 'hexa', 'dyn_select': '3'}])
+
+            self.assertRaises(Exception, self.selection_required.create, [{}])
+            transaction.cursor.rollback()
+
+            self.assertRaises(Exception, self.selection_required.create,
+                [{'select': None}])
+            transaction.cursor.rollback()
+
+            selection6, = self.selection_required.create([{'select': 'latin'}])
+            self.assert_(selection6)
+            self.assertEqual(selection6.select, 'latin')
+
+    def test0170dict(self):
+        'Test Dict'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            dict1, = self.dict_.create([{
+                        'dico': {'a': 1, 'b': 2},
+                        }])
+            self.assert_(dict1.dico == {'a': 1, 'b': 2})
+
+            self.dict_.write([dict1], {'dico': {'z': 26}})
+            self.assert_(dict1.dico == {'z': 26})
+
+            dict2, = self.dict_.create([{}])
+            self.assert_(dict2.dico is None)
+
+            dict3, = self.dict_default.create([{}])
+            self.assert_(dict3.dico == {'a': 1})
+
+            self.assertRaises(Exception, self.dict_required.create, [{}])
+            transaction.cursor.rollback()
+
+            dict4, = self.dict_required.create([{'dico': dict(a=1)}])
+            self.assert_(dict4.dico == {'a': 1})
+
+            self.assertRaises(Exception, self.dict_required.create,
+                [{'dico': {}}])
+            transaction.cursor.rollback()
+
+    def test0180binary(self):
+        'Test Binary'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+            bin1, = self.binary.create([{
+                        'binary': buffer('foo'),
+                        }])
+            self.assert_(bin1.binary == buffer('foo'))
+
+            self.binary.write([bin1], {'binary': buffer('bar')})
+            self.assert_(bin1.binary == buffer('bar'))
+
+            with transaction.set_context({'test.binary.binary': 'size'}):
+                bin1_size = self.binary(bin1.id)
+                self.assert_(bin1_size.binary == len('bar'))
+                self.assert_(bin1_size.binary != buffer('bar'))
+
+            bin2, = self.binary.create([{}])
+            self.assert_(bin2.binary is None)
+
+            bin3, = self.binary_default.create([{}])
+            self.assert_(bin3.binary == buffer('default'))
+
+            self.assertRaises(Exception, self.binary_required.create, [{}])
+            transaction.cursor.rollback()
+
+            bin4, = self.binary_required.create([{'binary': buffer('baz')}])
+            self.assert_(bin4.binary == buffer('baz'))
+
+            self.assertRaises(Exception, self.binary_required.create,
+                [{'binary': buffer('')}])
+
+            transaction.cursor.rollback()
+
+    def test0190many2one(self):
+        'Test Many2One'
+        with Transaction().start(DB_NAME, USER,
+                context=CONTEXT) as transaction:
+
+            # Not respecting the domain raise an Error
+            m2o_1, = self.m2o_target.create([{'value': 1}])
+            self.assertRaises(UserError, self.m2o_domain_validation.create,
+                [{'many2one': m2o_1}])
+
+            # Respecting the domain works
+            m2o_6, = self.m2o_target.create([{'value': 6}])
+            domain, = self.m2o_domain_validation.create([{'many2one': m2o_6}])
+            self.assert_(domain)
+            self.assertEqual(domain.many2one.value, 6)
+
+            # Inactive records are taken into account
+            m2o_6.active = False
+            m2o_6.save()
+            domain.dummy = 'Dummy'
+            domain.save()
+
+            transaction.cursor.rollback()
+
 
 def suite():
     return unittest.TestLoader().loadTestsFromTestCase(FieldsTestCase)
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)

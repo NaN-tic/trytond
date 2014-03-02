@@ -3,9 +3,10 @@
 from trytond.model import ModelView, ModelSQL, fields
 from trytond.transaction import Transaction
 from trytond.pool import Pool
+from trytond.rpc import RPC
 
 __all__ = [
-    'UIMenu',
+    'UIMenu', 'UIMenuFavorite',
     ]
 
 
@@ -77,8 +78,8 @@ class UIMenu(ModelSQL, ModelView):
             ondelete='CASCADE')
     groups = fields.Many2Many('ir.ui.menu-res.group',
        'menu', 'group', 'Groups')
-    complete_name = fields.Function(fields.Char('Complete Name',
-        order_field='name'), 'get_rec_name', searcher='search_rec_name')
+    complete_name = fields.Function(fields.Char('Complete Name'),
+        'get_rec_name', searcher='search_rec_name')
     icon = fields.Selection('list_icons', 'Icon', translate=False)
     action = fields.Function(fields.Reference('Action',
             selection=[
@@ -89,19 +90,20 @@ class UIMenu(ModelSQL, ModelView):
                 ('ir.action.url', 'ir.action.url'),
                 ]), 'get_action', setter='set_action')
     active = fields.Boolean('Active')
+    favorite = fields.Function(fields.Boolean('Favorite'), 'get_favorite')
 
     @classmethod
     def __setup__(cls):
         super(UIMenu, cls).__setup__()
         cls._order.insert(0, ('sequence', 'ASC'))
-        cls._constraints += [
-            ('check_recursion', 'recursive_menu'),
-            ('check_name', 'wrong_name'),
-        ]
         cls._error_messages.update({
-            'recursive_menu': 'You can not create recursive menu!',
-            'wrong_name': 'You can not use "%s" in name field!' % SEPARATOR,
-        })
+                'wrong_name': ('"%%s" is not a valid menu name because it is '
+                    'not allowed to contain "%s".' % SEPARATOR),
+                })
+
+    @classmethod
+    def order_complet_name(cls, tables):
+        return cls.name.convert_order('name', tables, cls)
 
     @staticmethod
     def default_icon():
@@ -122,38 +124,55 @@ class UIMenu(ModelSQL, ModelView):
         return sorted(CLIENT_ICONS
             + [(name, name) for _, name in Icon.list_icons()])
 
+    @classmethod
+    def validate(cls, menus):
+        super(UIMenu, cls).validate(menus)
+        cls.check_recursion(menus)
+        for menu in menus:
+            menu.check_name()
+
     def check_name(self):
         if SEPARATOR in self.name:
-            return False
-        return True
+            self.raise_user_error('wrong_name', (self.name,))
 
     def get_rec_name(self, name):
-        if self.parent:
-            return self.parent.get_rec_name(name) + SEPARATOR + self.name
-        else:
-            return self.name
+        parent = self.parent
+        name = self.name
+        while parent:
+            name = parent.name + SEPARATOR + name
+            parent = parent.parent
+        return name
 
     @classmethod
     def search_rec_name(cls, name, clause):
         if isinstance(clause[2], basestring):
-            values = clause[2].split(SEPARATOR)
+            values = clause[2].split(SEPARATOR.strip())
             values.reverse()
             domain = []
             field = 'name'
             for name in values:
-                domain.append((field, clause[1], name))
+                domain.append((field, clause[1], name.strip()))
                 field = 'parent.' + field
-            ids = [m.id for m in cls.search(domain, order=[])]
-            return [('id', 'in', ids)]
-        #TODO Handle list
-        return [('name',) + tuple(clause[1:])]
+        else:
+            domain = [('name',) + tuple(clause[1:])]
+        ids = [m.id for m in cls.search(domain, order=[])]
+        return [('parent', 'child_of', ids)]
+
+    @classmethod
+    def search_global(cls, text):
+        # TODO improve search clause
+        for record in cls.search([
+                    ('rec_name', 'ilike', '%%%s%%' % text),
+                    ]):
+            if record.action:
+                yield record.id, record.rec_name, record.icon
 
     @classmethod
     def search(cls, domain, offset=0, limit=None, order=None, count=False,
-            query_string=False):
+            query=False):
         menus = super(UIMenu, cls).search(domain, offset=offset, limit=limit,
-                order=order, count=False, query_string=query_string)
-        if query_string:
+                order=order, count=False, query=query)
+        if query:
             return menus
 
         if menus:
@@ -217,10 +236,85 @@ class UIMenu(ModelSQL, ModelView):
             return
         Action = pool.get(action_type)
         action = Action(int(action_id))
+        to_create = []
         for menu in menus:
             with Transaction().set_context(_timestamp=False):
-                ActionKeyword.create({
-                    'keyword': 'tree_open',
-                    'model': str(menu),
-                    'action': action.action.id,
-                    })
+                to_create.append({
+                        'keyword': 'tree_open',
+                        'model': str(menu),
+                        'action': action.action.id,
+                        })
+        if to_create:
+            ActionKeyword.create(to_create)
+
+    @classmethod
+    def get_favorite(cls, menus, name):
+        pool = Pool()
+        Favorite = pool.get('ir.ui.menu.favorite')
+        user = Transaction().user
+        favorites = Favorite.search([
+                ('menu', 'in', [m.id for m in menus]),
+                ('user', '=', user),
+                ])
+        menu2favorite = dict((m.id, False if m.action else None)
+            for m in menus)
+        menu2favorite.update(dict((f.menu.id, True) for f in favorites))
+        return menu2favorite
+
+
+class UIMenuFavorite(ModelSQL, ModelView):
+    "Menu Favorite"
+    __name__ = 'ir.ui.menu.favorite'
+
+    menu = fields.Many2One('ir.ui.menu', 'Menu', required=True,
+        ondelete='CASCADE')
+    sequence = fields.Integer('Sequence')
+    user = fields.Many2One('res.user', 'User', required=True,
+        ondelete='CASCADE')
+
+    @classmethod
+    def __setup__(cls):
+        super(UIMenuFavorite, cls).__setup__()
+        cls.__rpc__.update({
+                'get': RPC(),
+                'set': RPC(readonly=False),
+                'unset': RPC(readonly=False),
+                })
+        cls._order = [
+            ('sequence', 'ASC'),
+            ('id', 'DESC'),
+            ]
+
+    @staticmethod
+    def order_sequence(tables):
+        table, _ = tables[None]
+        return [table.sequence == None, table.sequence]
+
+    @staticmethod
+    def default_user():
+        return Transaction().user
+
+    @classmethod
+    def get(cls):
+        user = Transaction().user
+        favorites = cls.search([
+                ('user', '=', user),
+                ])
+        return [(f.menu.id, f.menu.rec_name, f.menu.icon) for f in favorites]
+
+    @classmethod
+    def set(cls, menu_id):
+        user = Transaction().user
+        cls.create([{
+                    'menu': menu_id,
+                    'user': user,
+                    }])
+
+    @classmethod
+    def unset(cls, menu_id):
+        user = Transaction().user
+        favorites = cls.search([
+                ('menu', '=', menu_id),
+                ('user', '=', user),
+                ])
+        cls.delete(favorites)

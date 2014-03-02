@@ -1,6 +1,7 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 from ..pool import Pool
+from .configuration import *
 from .translation import *
 from .sequence import *
 from .ui.menu import *
@@ -23,9 +24,10 @@ from .session import *
 
 def register():
     Pool.register(
+        Configuration,
         Translation,
-        ReportTranslationSetStart,
-        ReportTranslationSetSucceed,
+        TranslationSetStart,
+        TranslationSetSucceed,
         TranslationCleanStart,
         TranslationCleanSucceed,
         TranslationUpdateStart,
@@ -35,11 +37,12 @@ def register():
         Sequence,
         SequenceStrict,
         UIMenu,
+        UIMenuFavorite,
         View,
         ShowViewStart,
-        ViewShortcut,
         ViewTreeWidth,
-        ViewTreeExpandedState,
+        ViewTreeState,
+        ViewSearch,
         Icon,
         Property,
         Action,
@@ -47,6 +50,7 @@ def register():
         ActionReport,
         ActionActWindow,
         ActionActWindowView,
+        ActionActWindowDomain,
         ActionWizard,
         ActionURL,
         Model,
@@ -68,6 +72,7 @@ def register():
         ModuleConfigWizardItem,
         ModuleConfigWizardFirst,
         ModuleConfigWizardOther,
+        ModuleConfigWizardDone,
         ModuleInstallUpgradeStart,
         ModuleInstallUpgradeDone,
         Cache,
@@ -78,11 +83,10 @@ def register():
         SessionWizard,
         module='ir', type_='model')
     Pool.register(
-        ReportTranslationSet,
+        TranslationSet,
         TranslationClean,
         TranslationUpdate,
         TranslationExport,
-        OpenShortcut,
         ShowView,
         PrintModelGraph,
         ModuleConfigWizard,

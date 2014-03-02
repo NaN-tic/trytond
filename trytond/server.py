@@ -9,16 +9,14 @@ import sys
 import os
 import signal
 import time
-from trytond.config import CONFIG
 from getpass import getpass
-try:
-    import hashlib
-except ImportError:
-    hashlib = None
-    import sha
 import threading
-import string
-import random
+
+from trytond.config import CONFIG
+from trytond import backend
+from trytond.pool import Pool
+from trytond.monitor import monitor
+from .transaction import Transaction
 
 
 class TrytonServer(object):
@@ -31,7 +29,6 @@ class TrytonServer(object):
 
         CONFIG.update_etc(options['configfile'])
         CONFIG.update_cmdline(options)
-        CONFIG.set_timezone()
 
         if CONFIG['logfile']:
             logf = CONFIG['logfile']
@@ -44,9 +41,9 @@ class TrytonServer(object):
                     logf, 'D', 1, 30)
                 handler.rolloverAt -= diff
             except Exception, exception:
-                sys.stderr.write(\
-                        "ERROR: couldn't create the logfile directory:" \
-                        + str(exception))
+                sys.stderr.write(
+                    "ERROR: couldn't create the logfile directory:"
+                    + str(exception))
             else:
                 formatter = logging.Formatter(format, datefmt)
                 # tell the handler to use this format
@@ -66,8 +63,8 @@ class TrytonServer(object):
         self.logger = logging.getLogger("server")
 
         if CONFIG.configfile:
-            self.logger.info('using %s as configuration file' % \
-                    CONFIG.configfile)
+            self.logger.info('using %s as configuration file'
+                % CONFIG.configfile)
         else:
             self.logger.info('using default configuration')
         self.logger.info('initialising distributed objects services')
@@ -77,9 +74,6 @@ class TrytonServer(object):
 
     def run(self):
         "Run the server and never return"
-        from trytond.backend import Database
-        from trytond.pool import Pool
-        from trytond.monitor import monitor
         update = bool(CONFIG['init'] or CONFIG['update'])
         init = {}
 
@@ -103,33 +97,27 @@ class TrytonServer(object):
 
         for db_name in CONFIG["db_name"]:
             init[db_name] = False
-            database = Database(db_name).connect()
-            cursor = database.cursor()
-
-            try:
+            with Transaction().start(db_name, 0) as transaction:
+                cursor = transaction.cursor
                 if CONFIG['init']:
                     if not cursor.test():
                         self.logger.info("init db")
-                        Database.init(cursor)
+                        backend.get('Database').init(cursor)
                         init[db_name] = True
                     cursor.commit()
                 elif not cursor.test():
                     raise Exception("'%s' is not a Tryton database!" % db_name)
-            finally:
-                cursor.close()
 
         for db_name in CONFIG["db_name"]:
             if update:
-                cursor = Database(db_name).connect().cursor()
-                try:
+                with Transaction().start(db_name, 0) as transaction:
+                    cursor = transaction.cursor
                     if not cursor.test():
                         raise Exception("'%s' is not a Tryton database!"
                             % db_name)
-                    cursor.execute('SELECT code FROM ir_lang ' \
-                            'WHERE translatable')
+                    cursor.execute('SELECT code FROM ir_lang '
+                        'WHERE translatable')
                     lang = [x[0] for x in cursor.fetchall()]
-                finally:
-                    cursor.close()
             else:
                 lang = None
             Pool(db_name).init(update=update, lang=lang)
@@ -148,38 +136,30 @@ class TrytonServer(object):
                         with open(passpath) as passfile:
                             password = passfile.readline()[:-1]
                     except Exception, err:
-                        sys.stderr.write('Can not read password ' \
-                                'from "%s": "%s"\n' % (passpath, err))
+                        sys.stderr.write('Can not read password '
+                            'from "%s": "%s"\n' % (passpath, err))
 
                 if not password:
                     while True:
                         password = getpass('Admin Password for %s: ' % db_name)
                         password2 = getpass('Admin Password Confirmation: ')
                         if password != password2:
-                            sys.stderr.write('Admin Password Confirmation ' \
-                                    'doesn\'t match Admin Password!\n')
+                            sys.stderr.write('Admin Password Confirmation '
+                                'doesn\'t match Admin Password!\n')
                             continue
                         if not password:
                             sys.stderr.write('Admin Password is required!\n')
                             continue
                         break
 
-                database = Database(db_name).connect()
-                cursor = database.cursor()
-                try:
-                    salt = ''.join(random.sample(
-                        string.letters + string.digits, 8))
-                    password += salt
-                    if hashlib:
-                        password = hashlib.sha1(password).hexdigest()
-                    else:
-                        password = sha.new(password).hexdigest()
-                    cursor.execute('UPDATE res_user ' \
-                            'SET password = %s, salt = %s ' \
-                            'WHERE login = \'admin\'', (password, salt))
-                    cursor.commit()
-                finally:
-                    cursor.close()
+                with Transaction().start(db_name, 0) as transaction:
+                    pool = Pool()
+                    User = pool.get('res.user')
+                    admin, = User.search([('login', '=', 'admin')])
+                    User.write([admin], {
+                            'password': password,
+                            })
+                    transaction.cursor.commit()
 
         if update:
             self.logger.info('Update/Init succeed!')

@@ -9,6 +9,9 @@ import encodings
 import uuid
 import datetime
 from dateutil.relativedelta import relativedelta
+from sql.functions import Extract
+from sql.conditionals import Coalesce
+
 from trytond.model import ModelView, ModelSQL, fields
 from trytond.tools import reduce_ids, safe_eval
 from trytond.transaction import Transaction
@@ -45,8 +48,8 @@ class Collection(ModelSQL, ModelView):
     childs = fields.One2Many('webdav.collection', 'parent', 'Children')
     model = fields.Many2One('ir.model', 'Model')
     domain = fields.Char('Domain')
-    complete_name = fields.Function(fields.Char('Complete Name',
-            order_field='name'), 'get_rec_name')
+    complete_name = fields.Function(fields.Char('Complete Name'),
+        'get_rec_name')
 
     @classmethod
     def __setup__(cls):
@@ -55,22 +58,20 @@ class Collection(ModelSQL, ModelView):
             ('name_parent_uniq', 'UNIQUE (name, parent)',
                 'The collection name must be unique inside a collection!'),
         ]
-        cls._constraints += [
-            ('check_recursion', 'recursive_collections'),
-            ('check_attachment', 'collection_file_name'),
-        ]
         cls._error_messages.update({
-            'recursive_collections': 'You can not create recursive ' \
-                    'collections!',
-            'collection_file_name': 'You can not create a collection\n' \
-                    'in a collection with the name of an ' \
-                    'existing file!',
-        })
+                'collection_file_name': ('You can not create a collection '
+                    'named "%(parent)s" in collection "%(child)s" because '
+                    'there is already a file with that name.'),
+                })
         cls.ext2mime = {
             '.png': 'image/png',
             '.odt': 'application/vnd.oasis.opendocument.text',
             '.pdf': 'application/pdf',
         }
+
+    @classmethod
+    def order_complet_name(cls, tables):
+        return cls.name.convert_order('name', tables, cls)
 
     @staticmethod
     def default_domain():
@@ -81,6 +82,12 @@ class Collection(ModelSQL, ModelView):
             return self.parent.rec_name + '/' + self.name
         else:
             return self.name
+
+    @classmethod
+    def validate(cls, collections):
+        super(Collection, cls).validate(collections)
+        cls.check_recursion(collections, rec_name='name')
+        cls.check_attachment(collections)
 
     @classmethod
     def check_attachment(cls, collections):
@@ -94,8 +101,10 @@ class Collection(ModelSQL, ModelView):
                     ])
                 for attachment in attachments:
                     if attachment.name == collection.name:
-                        return False
-        return True
+                        cls.raise_user_error('collection_file_name', {
+                                'parent': collection.parent.rec_name,
+                                'child': collection.rec_name,
+                                })
 
     @classmethod
     def _uri2object(cls, uri, object_name=__name__, object_id=None,
@@ -132,7 +141,7 @@ class Collection(ModelSQL, ModelView):
                 for collection in collections:
                     if cache is not None:
                         cache['_parent2collection_ids'][object_id]\
-                                .setdefault(collection.name, [])
+                            .setdefault(collection.name, [])
                         cache['_parent2collection_ids'][object_id][
                             collection.name].append(collection.id)
                         cache.setdefault('_collection_name', {})
@@ -188,7 +197,7 @@ class Collection(ModelSQL, ModelView):
                             cache['_model&id&name2attachment_ids'].setdefault(
                                     key, {})
                             cache['_model&id&name2attachment_ids'][key]\
-                                    .setdefault(attachment.name, [])
+                                .setdefault(attachment.name, [])
                             cache['_model&id&name2attachment_ids'][key][
                                 attachment.name].append(attachment.id)
                         if attachment.name == name:
@@ -221,12 +230,12 @@ class Collection(ModelSQL, ModelView):
                     ('model', '=', object_name),
                     ])
                 for report in reports:
-                    report_name = report.name + '-' + str(report.id) \
-                            + '.' + report.extension
+                    report_name = (report.name + '-' + str(report.id)
+                        + '.' + report.extension)
                     if uri == report_name:
                         if cache is not None:
                             cache['_uri2object'][cache_uri] = \
-                                    ('ir.action.report', object_id)
+                                ('ir.action.report', object_id)
                         return 'ir.action.report', object_id
                 name = uri
                 attachment_ids = None
@@ -247,7 +256,7 @@ class Collection(ModelSQL, ModelView):
                     for attachment in attachments:
                         if cache is not None:
                             cache['_model&id2attachment_ids'][key]\
-                                    .setdefault(attachment.name, [])
+                                .setdefault(attachment.name, [])
                             cache['_model&id2attachment_ids'][key][
                                 attachment.name].append(attachment.id)
                         if attachment.name == name:
@@ -319,8 +328,8 @@ class Collection(ModelSQL, ModelView):
                 ('model', '=', object_name),
                 ])
             for report in reports:
-                report_name = report.name + '-' + str(report.id) \
-                        + '.' + report.extension
+                report_name = (report.name + '-' + str(report.id)
+                    + '.' + report.extension)
                 if '/' in report_name:
                     continue
                 res.append(report_name)
@@ -389,7 +398,7 @@ class Collection(ModelSQL, ModelView):
                 if cache is not None:
                     cache['ir.attachment'].setdefault(attachment.id, {})
                     cache['ir.attachment'][attachment.id]['contentlength'] = \
-                            size
+                        size
             return res
         return '0'
 
@@ -422,13 +431,13 @@ class Collection(ModelSQL, ModelView):
                     ids = [object_id]
                 res = None
                 cursor = Transaction().cursor
+                table = Model.__table__()
                 for i in range(0, len(ids), cursor.IN_MAX):
                     sub_ids = ids[i:i + cursor.IN_MAX]
-                    red_sql, red_ids = reduce_ids('id', sub_ids)
-                    cursor.execute('SELECT id, '
-                        'EXTRACT(epoch FROM create_date) '
-                        'FROM "' + Model._table + '" '
-                        'WHERE ' + red_sql, red_ids)
+                    red_sql = reduce_ids(table.id, sub_ids)
+                    cursor.execute(*table.select(table.id,
+                            Extract('EPOCH', table.create_date),
+                            where=red_sql))
                     for object_id2, date in cursor.fetchall():
                         if object_id2 == object_id:
                             res = date
@@ -459,14 +468,14 @@ class Collection(ModelSQL, ModelView):
                     ids = [object_id]
                 res = None
                 cursor = Transaction().cursor
+                table = Model.__table__()
                 for i in range(0, len(ids), cursor.IN_MAX):
                     sub_ids = ids[i:i + cursor.IN_MAX]
-                    red_sql, red_ids = reduce_ids('id', sub_ids)
-                    cursor.execute('SELECT id, '
-                        'EXTRACT(epoch FROM '
-                            'COALESCE(write_date, create_date)) '
-                        'FROM "' + Model._table + '" '
-                        'WHERE ' + red_sql, red_ids)
+                    red_sql = reduce_ids(table.id, sub_ids)
+                    cursor.execute(*table.select(table.id,
+                            Extract('EPOCH',
+                                Coalesce(table.write_date, table.create_date)),
+                            where=red_sql))
                     for object_id2, date in cursor.fetchall():
                         if object_id2 == object_id:
                             res = date
@@ -539,7 +548,7 @@ class Collection(ModelSQL, ModelView):
         object_name, object_id = cls._uri2object(get_uriparentpath(uri),
                 cache=cache)
         if not object_name \
-                or object_name in ('ir.attachment') \
+                or object_name == 'ir.attachment' \
                 or not object_id:
             raise DAV_Forbidden
         pool = Pool()
@@ -548,11 +557,11 @@ class Collection(ModelSQL, ModelView):
         if not object_id2:
             name = get_urifilename(uri)
             try:
-                Attachment.create({
-                    'name': name,
-                    'data': data,
-                    'resource': '%s,%s' % (object_name, object_id),
-                    })
+                Attachment.create([{
+                            'name': name,
+                            'data': data,
+                            'resource': '%s,%s' % (object_name, object_id),
+                            }])
             except Exception:
                 raise DAV_Forbidden
         else:
@@ -576,10 +585,10 @@ class Collection(ModelSQL, ModelView):
             raise DAV_Forbidden
         name = get_urifilename(uri)
         try:
-            cls.create({
-                'name': name,
-                'parent': object_id,
-                })
+            cls.create([{
+                        'name': name,
+                        'parent': object_id,
+                        }])
         except Exception:
             raise DAV_Forbidden
         return 201
@@ -697,14 +706,17 @@ class Attachment(ModelSQL, ModelView):
     @classmethod
     def __setup__(cls):
         super(Attachment, cls).__setup__()
-        cls._constraints += [
-            ('check_collection', 'collection_attachment_name'),
-        ]
         cls._error_messages.update({
-            'collection_attachment_name': ('You can not create an attachment\n'
-                    'in a collection with the name\n'
-                    'of an existing child collection!'),
-        })
+                'collection_attachment_name': ('You can not create an '
+                    'attachment named "%(attachment)s in collection '
+                    '"%(collection)s" because there is already a collection '
+                    'with that name.')
+                })
+
+    @classmethod
+    def validate(cls, attachments):
+        super(Attachment, cls).validate(attachments)
+        cls.check_collection(attachments)
 
     @classmethod
     def check_collection(cls, attachments):
@@ -718,8 +730,11 @@ class Attachment(ModelSQL, ModelView):
                     collection = Collection(int(record_id))
                     for child in collection.childs:
                         if child.name == attachment.name:
-                            return False
-        return True
+                            cls.raise_user_error(
+                                'collection_attachment_name', {
+                                    'attachment': attachment.rec_name,
+                                    'collection': collection.rec_name,
+                                    })
 
     @classmethod
     def get_path(cls, attachments, name):
@@ -782,34 +797,34 @@ class Attachment(ModelSQL, ModelView):
         return result
 
     @classmethod
-    def set_shares(cls, attachments, name, value):
+    def set_shares(cls, attachments, name, values):
         Share = Pool().get('webdav.share')
 
-        if not value:
+        if not values:
             return
 
-        for action in value:
-            if action[0] == 'create':
-                for attachment in attachments:
-                    action[1]['path'] = attachment.path
-                    Share.create(action[1])
-            elif action[0] == 'write':
-                Share.write(action[1], action[2])
-            elif action[0] == 'delete':
-                Share.delete(Share.browse(action[1]))
-            elif action[0] == 'delete_all':
-                paths = [a.path for a in attachments]
-                shares = Share.search([
-                        ('path', 'in', paths),
-                        ])
-                Share.delete(shares)
-            elif action[0] == 'unlink':
-                pass
-            elif action[0] == 'add':
-                pass
-            elif action[0] == 'unlink_all':
-                pass
-            elif action[0] == 'set':
-                pass
-            else:
-                raise Exception('Bad arguments')
+        def create(vlist):
+            to_create = []
+            for attachment in attachments:
+                for values in vlist:
+                    values = values.copy()
+                    values['path'] = attachment.path
+                    to_create.append(values)
+            if to_create:
+                Share.create(to_create)
+
+        def write(ids, values):
+            Share.write(Share.browse(ids), values)
+
+        def delete(share_ids):
+            Share.delete(Share.browse(share_ids))
+
+        actions = {
+            'create': create,
+            'write': write,
+            'delete': delete,
+            }
+        for value in values:
+            action = value[0]
+            args = value[1:]
+            actions[action](*args)

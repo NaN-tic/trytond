@@ -8,6 +8,10 @@ from trytond.exceptions import UserError, UserWarning
 class WarningErrorMixin(object):
 
     @classmethod
+    def _get_error_messages(cls):
+        return cls._error_messages.values()
+
+    @classmethod
     def raise_user_error(cls, error, error_args=None,
             error_description='', error_description_args=None,
             raise_exception=True):
@@ -58,8 +62,8 @@ class WarningErrorMixin(object):
 
             if error_description_args:
                 try:
-                    error_description = error_description % \
-                            error_description_args
+                    error_description = (error_description
+                        % error_description_args)
                 except TypeError:
                     pass
             if raise_exception:

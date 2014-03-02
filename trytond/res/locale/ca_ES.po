@@ -12,14 +12,17 @@ msgstr "Contrasenya incorrecta."
 
 msgctxt "error:res.user:"
 msgid "You can not have two users with the same login!"
-msgstr "No poden haver-hi dos identificadors amb el mateix nom."
+msgstr "No podeu tenir dos usuaris amb el mateix identificador d'entrada!"
 
 msgctxt "error:res.user:"
 msgid ""
 "You can not remove the root user\n"
 "as it is used internally for resources\n"
 "created by the system (updates, module installation, ...)"
-msgstr "No podeu eliminar un usuari del sistema."
+msgstr ""
+"No podeu eliminar l'usuari del sistema\n"
+"que es utilitzat per recursos del sistema\n"
+"(actualitzacions, instal·lacions,...)"
 
 msgctxt "field:ir.action-res.group,action:"
 msgid "Action"
@@ -97,11 +100,11 @@ msgctxt "field:ir.model.field-res.group,create_uid:"
 msgid "Create User"
 msgstr "Usuari creació"
 
-msgctxt "field:ir.model.field-res.group,field_id:"
+msgctxt "field:ir.model.field-res.group,field:"
 msgid "Model Field"
-msgstr "Camp model"
+msgstr "Camp del model"
 
-msgctxt "field:ir.model.field-res.group,group_id:"
+msgctxt "field:ir.model.field-res.group,group:"
 msgid "Group"
 msgstr "Grup"
 
@@ -309,210 +312,6 @@ msgctxt "field:res.group,write_uid:"
 msgid "Write User"
 msgstr "Usuari modificació"
 
-msgctxt "field:res.request,act_from:"
-msgid "From"
-msgstr "Desde"
-
-msgctxt "field:res.request,act_to:"
-msgid "To"
-msgstr "Per a"
-
-msgctxt "field:res.request,active:"
-msgid "Active"
-msgstr "Actiu"
-
-msgctxt "field:res.request,body:"
-msgid "Body"
-msgstr "Cos"
-
-msgctxt "field:res.request,create_date:"
-msgid "Create Date"
-msgstr "Data creació"
-
-msgctxt "field:res.request,create_uid:"
-msgid "Create User"
-msgstr "Usuari creació"
-
-msgctxt "field:res.request,date_sent:"
-msgid "Date"
-msgstr "Data"
-
-msgctxt "field:res.request,history:"
-msgid "History"
-msgstr "Historial"
-
-msgctxt "field:res.request,id:"
-msgid "ID"
-msgstr "ID"
-
-msgctxt "field:res.request,name:"
-msgid "Subject"
-msgstr "Assumpte"
-
-msgctxt "field:res.request,number_references:"
-msgid "Number of References"
-msgstr "Número de referències"
-
-msgctxt "field:res.request,priority:"
-msgid "Priority"
-msgstr "Prioritat"
-
-msgctxt "field:res.request,rec_name:"
-msgid "Name"
-msgstr "Nom"
-
-msgctxt "field:res.request,references:"
-msgid "References"
-msgstr "Referències"
-
-msgctxt "field:res.request,state:"
-msgid "State"
-msgstr "Estat"
-
-msgctxt "field:res.request,trigger_date:"
-msgid "Trigger Date"
-msgstr "Data disparador"
-
-msgctxt "field:res.request,write_date:"
-msgid "Write Date"
-msgstr "Data modificació"
-
-msgctxt "field:res.request,write_uid:"
-msgid "Write User"
-msgstr "Usuari modificació"
-
-msgctxt "field:res.request.history,act_from:"
-msgid "From"
-msgstr "Desde"
-
-msgctxt "field:res.request.history,act_to:"
-msgid "To"
-msgstr "Per a"
-
-msgctxt "field:res.request.history,body:"
-msgid "Body"
-msgstr "Cos"
-
-msgctxt "field:res.request.history,create_date:"
-msgid "Create Date"
-msgstr "Data creació"
-
-msgctxt "field:res.request.history,create_uid:"
-msgid "Create User"
-msgstr "Usuari creació"
-
-msgctxt "field:res.request.history,date_sent:"
-msgid "Date sent"
-msgstr "Data enviat"
-
-msgctxt "field:res.request.history,id:"
-msgid "ID"
-msgstr "ID"
-
-msgctxt "field:res.request.history,name:"
-msgid "Summary"
-msgstr "Sumari"
-
-msgctxt "field:res.request.history,number_references:"
-msgid "References"
-msgstr "Referències"
-
-msgctxt "field:res.request.history,priority:"
-msgid "Priority"
-msgstr "Prioritat"
-
-msgctxt "field:res.request.history,rec_name:"
-msgid "Name"
-msgstr "Nom"
-
-msgctxt "field:res.request.history,request:"
-msgid "Request"
-msgstr "Sol·licitud"
-
-msgctxt "field:res.request.history,state:"
-msgid "State"
-msgstr "Estat"
-
-msgctxt "field:res.request.history,subject:"
-msgid "Subject"
-msgstr "Assumpte"
-
-msgctxt "field:res.request.history,write_date:"
-msgid "Write Date"
-msgstr "Data modificació"
-
-msgctxt "field:res.request.history,write_uid:"
-msgid "Write User"
-msgstr "Usuari modificació"
-
-msgctxt "field:res.request.link,create_date:"
-msgid "Create Date"
-msgstr "Data creació"
-
-msgctxt "field:res.request.link,create_uid:"
-msgid "Create User"
-msgstr "Usuari creació"
-
-msgctxt "field:res.request.link,id:"
-msgid "ID"
-msgstr "ID"
-
-msgctxt "field:res.request.link,model:"
-msgid "Model"
-msgstr "Model"
-
-msgctxt "field:res.request.link,name:"
-msgid "Name"
-msgstr "Nom"
-
-msgctxt "field:res.request.link,priority:"
-msgid "Priority"
-msgstr "Prioritat"
-
-msgctxt "field:res.request.link,rec_name:"
-msgid "Name"
-msgstr "Nom"
-
-msgctxt "field:res.request.link,write_date:"
-msgid "Write Date"
-msgstr "Data modificació"
-
-msgctxt "field:res.request.link,write_uid:"
-msgid "Write User"
-msgstr "Usuari modificació"
-
-msgctxt "field:res.request.reference,create_date:"
-msgid "Create Date"
-msgstr "Data creació"
-
-msgctxt "field:res.request.reference,create_uid:"
-msgid "Create User"
-msgstr "Usuari creació"
-
-msgctxt "field:res.request.reference,id:"
-msgid "ID"
-msgstr "ID"
-
-msgctxt "field:res.request.reference,rec_name:"
-msgid "Name"
-msgstr "Nom"
-
-msgctxt "field:res.request.reference,reference:"
-msgid "Reference"
-msgstr "Referència"
-
-msgctxt "field:res.request.reference,request:"
-msgid "Request"
-msgstr "Sol·licitud"
-
-msgctxt "field:res.request.reference,write_date:"
-msgid "Write Date"
-msgstr "Data modificació"
-
-msgctxt "field:res.request.reference,write_uid:"
-msgid "Write User"
-msgstr "Usuari modificació"
-
 msgctxt "field:res.user,actions:"
 msgid "Actions"
 msgstr "Accions"
@@ -551,11 +350,7 @@ msgstr "Direcció idioma"
 
 msgctxt "field:res.user,login:"
 msgid "Login"
-msgstr "Identificador"
-
-msgctxt "field:res.user,login_try:"
-msgid "Login Try"
-msgstr "Intenta altre vegada"
+msgstr "Nom d'usuari"
 
 msgctxt "field:res.user,menu:"
 msgid "Menu Action"
@@ -681,6 +476,34 @@ msgctxt "field:res.user.config.start,id:"
 msgid "ID"
 msgstr "ID"
 
+msgctxt "field:res.user.login.attempt,create_date:"
+msgid "Create Date"
+msgstr "Data creació"
+
+msgctxt "field:res.user.login.attempt,create_uid:"
+msgid "Create User"
+msgstr "Usuari creació"
+
+msgctxt "field:res.user.login.attempt,id:"
+msgid "ID"
+msgstr "ID"
+
+msgctxt "field:res.user.login.attempt,login:"
+msgid "Login"
+msgstr "Nom d'usuari"
+
+msgctxt "field:res.user.login.attempt,rec_name:"
+msgid "Name"
+msgstr "Nom"
+
+msgctxt "field:res.user.login.attempt,write_date:"
+msgid "Write Date"
+msgstr "Data modificació"
+
+msgctxt "field:res.user.login.attempt,write_uid:"
+msgid "Write User"
+msgstr "Usuari modificació"
+
 msgctxt "field:res.user.warning,always:"
 msgid "Always"
 msgstr "Sempre"
@@ -729,14 +552,6 @@ msgctxt "model:ir.action,name:act_group_form"
 msgid "Groups"
 msgstr "Grups"
 
-msgctxt "model:ir.action,name:act_request_form"
-msgid "Requests"
-msgstr "Sol·licituds"
-
-msgctxt "model:ir.action,name:act_request_link_form"
-msgid "Request Links"
-msgstr "Vincles sol·licituds"
-
 msgctxt "model:ir.action,name:act_user_config"
 msgid "Configure Users"
 msgstr "Configura usuaris"
@@ -759,7 +574,7 @@ msgstr "Model butó - grup"
 
 msgctxt "model:ir.model.field-res.group,name:"
 msgid "Model Field Group Rel"
-msgstr "Model Field Group Rel"
+msgstr "Relació entre grup i camp del model"
 
 msgctxt "model:ir.rule.group-res.group,name:"
 msgid "Rule Group - Group"
@@ -776,14 +591,6 @@ msgstr "Tipus de seqüència - Grup"
 msgctxt "model:ir.ui.menu,name:menu_group_form"
 msgid "Groups"
 msgstr "Grups"
-
-msgctxt "model:ir.ui.menu,name:menu_request_form"
-msgid "Requests"
-msgstr "Sol·licituds"
-
-msgctxt "model:ir.ui.menu,name:menu_request_link_form"
-msgid "Request Links"
-msgstr "Vincles sol·licituds"
 
 msgctxt "model:ir.ui.menu,name:menu_res"
 msgid "Users"
@@ -804,26 +611,6 @@ msgstr "Grup"
 msgctxt "model:res.group,name:group_admin"
 msgid "Administration"
 msgstr "Administració"
-
-msgctxt "model:res.request,name:"
-msgid "Request"
-msgstr "Sol·licitud"
-
-msgctxt "model:res.request.history,name:"
-msgid "Request history"
-msgstr "Historial sol·licitud"
-
-msgctxt "model:res.request.link,name:"
-msgid "Request link"
-msgstr "Vincle sol·licitud"
-
-msgctxt "model:res.request.link,name:request_link_cron"
-msgid "Scheduler"
-msgstr "Planificador"
-
-msgctxt "model:res.request.reference,name:"
-msgid "Request Reference"
-msgstr "Referència sol·licitud"
 
 msgctxt "model:res.user,name:"
 msgid "User"
@@ -849,65 +636,13 @@ msgctxt "model:res.user.config.start,name:"
 msgid "User Config Init"
 msgstr "Configuració usuari"
 
+msgctxt "model:res.user.login.attempt,name:"
+msgid "Login Attempt"
+msgstr "Intent d'inici de sessió"
+
 msgctxt "model:res.user.warning,name:"
 msgid "User Warning"
-msgstr "Usuari alerta"
-
-msgctxt "selection:res.request,priority:"
-msgid "High"
-msgstr "Alt"
-
-msgctxt "selection:res.request,priority:"
-msgid "Low"
-msgstr "Sota"
-
-msgctxt "selection:res.request,priority:"
-msgid "Normal"
-msgstr "Normal"
-
-msgctxt "selection:res.request,state:"
-msgid "Chatting"
-msgstr "Xatejant"
-
-msgctxt "selection:res.request,state:"
-msgid "Closed"
-msgstr "Tancat"
-
-msgctxt "selection:res.request,state:"
-msgid "Draft"
-msgstr "Borrador"
-
-msgctxt "selection:res.request,state:"
-msgid "Waiting"
-msgstr "Esperant"
-
-msgctxt "selection:res.request.history,priority:"
-msgid "High"
-msgstr "Alt"
-
-msgctxt "selection:res.request.history,priority:"
-msgid "Low"
-msgstr "Sota"
-
-msgctxt "selection:res.request.history,priority:"
-msgid "Normal"
-msgstr "Normal"
-
-msgctxt "selection:res.request.history,state:"
-msgid "Chatting"
-msgstr "Xatejant"
-
-msgctxt "selection:res.request.history,state:"
-msgid "Closed"
-msgstr "Tancat"
-
-msgctxt "selection:res.request.history,state:"
-msgid "Draft"
-msgstr "Borrador"
-
-msgctxt "selection:res.request.history,state:"
-msgid "Waiting"
-msgstr "Esperant"
+msgstr "Alerta usuari"
 
 msgctxt "view:res.group:"
 msgid "Access Permissions"
@@ -924,46 +659,6 @@ msgstr "Grups"
 msgctxt "view:res.group:"
 msgid "Members"
 msgstr "Membres"
-
-msgctxt "view:res.request.history:"
-msgid "Request History"
-msgstr "Historial sol·licitud"
-
-msgctxt "view:res.request.link:"
-msgid "Request Link"
-msgstr "Vincle sol·licitud"
-
-msgctxt "view:res.request.reference:"
-msgid "Request Reference"
-msgstr "Referència sol·licitud"
-
-msgctxt "view:res.request.reference:"
-msgid "Request References"
-msgstr "Referències sol·licituds"
-
-msgctxt "view:res.request:"
-msgid "Close"
-msgstr "Tanca"
-
-msgctxt "view:res.request:"
-msgid "References"
-msgstr "Referències"
-
-msgctxt "view:res.request:"
-msgid "Reply"
-msgstr "Respondre"
-
-msgctxt "view:res.request:"
-msgid "Request"
-msgstr "Sol·licitud"
-
-msgctxt "view:res.request:"
-msgid "Requests"
-msgstr "Sol·licituds"
-
-msgctxt "view:res.request:"
-msgid "Send"
-msgstr "Envia"
 
 msgctxt "view:res.user.config.start:"
 msgid "Add Users"

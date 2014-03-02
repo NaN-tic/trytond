@@ -1,10 +1,12 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
+from functools import wraps
+
 from trytond.model import ModelView, ModelSQL, fields
 from trytond.modules import create_graph, get_module_list, get_module_info
 from trytond.wizard import Wizard, StateView, Button, StateTransition, \
     StateAction
-from trytond.backend import TableHandler
+from trytond import backend
 from trytond.pool import Pool
 from trytond.transaction import Transaction
 from trytond.pyson import Eval
@@ -12,10 +14,21 @@ from trytond.rpc import RPC
 
 __all__ = [
     'Module', 'ModuleDependency', 'ModuleConfigWizardItem',
-    'ModuleConfigWizardFirst', 'ModuleConfigWizardOther', 'ModuleConfigWizard',
+    'ModuleConfigWizardFirst', 'ModuleConfigWizardOther',
+    'ModuleConfigWizardDone', 'ModuleConfigWizard',
     'ModuleInstallUpgradeStart', 'ModuleInstallUpgradeDone',
     'ModuleInstallUpgrade', 'ModuleConfig',
     ]
+
+
+def filter_state(state):
+    def filter(func):
+        @wraps(func)
+        def wrapper(cls, modules):
+            modules = [m for m in modules if m.state == state]
+            return func(cls, modules)
+        return wrapper
+    return filter
 
 
 class Module(ModelSQL, ModelView):
@@ -49,11 +62,11 @@ class Module(ModelSQL, ModelView):
                 'on_write': RPC(instantiate=0),
                 })
         cls._error_messages.update({
-            'delete_state': 'You can not remove a module that is installed ' \
-                    'or will be installed',
+            'delete_state': ('You can not remove a module that is installed '
+                    'or will be installed'),
             'missing_dep': 'Missing dependencies %s for module "%s"',
-            'uninstall_dep': 'The modules you are trying to uninstall ' \
-                    'depends on installed modules:',
+            'uninstall_dep': ('The modules you are trying to uninstall '
+                    'depends on installed modules:'),
             })
         cls._buttons.update({
                 'install': {
@@ -97,14 +110,14 @@ class Module(ModelSQL, ModelView):
     @classmethod
     def get_childs(cls, modules, name):
         child_ids = dict((m.id, []) for m in modules)
-        names = [m.name for m in modules]
+        name2id = dict((m.name, m.id) for m in modules)
         childs = cls.search([
-                ('dependencies.name', 'in', names),
+                ('dependencies.name', 'in', name2id.keys()),
                 ])
         for child in childs:
             for dep in child.dependencies:
-                if dep.module.id in child_ids:
-                    child_ids[dep.module.id].append(child.id)
+                if dep.name in name2id:
+                    child_ids[name2id[dep.name]].append(child.id)
         return child_ids
 
     @classmethod
@@ -121,34 +134,38 @@ class Module(ModelSQL, ModelView):
 
     @classmethod
     def on_write(cls, modules):
-        ids = set()
-        graph, packages, later = create_graph(get_module_list())
+        dependencies = set()
+
+        def get_parents(module):
+            parents = set(p.id for p in module.parents)
+            for p in module.parents:
+                parents.update(get_parents(p))
+            return parents
+
+        def get_childs(module):
+            childs = set(c.id for c in module.childs)
+            for c in module.childs:
+                childs.update(get_childs(c))
+            return childs
+
         for module in modules:
-            if module.name not in graph:
-                continue
-
-            def get_parents(module):
-                parents = set(p.name for p in module.parents)
-                for p in module.parents:
-                    parents.update(get_parents(p))
-                return parents
-            dependencies = get_parents(module)
-
-            def get_childs(module):
-                childs = set(c.name for c in module.childs)
-                for c in module.childs:
-                    childs.update(get_childs(c))
-                return childs
+            dependencies.update(get_parents(module))
             dependencies.update(get_childs(module))
-            ids |= set(x.id for x in cls.search([
-                        ('name', 'in', list(dependencies)),
-                        ]))
-        return list(ids)
+        return list(dependencies)
 
     @classmethod
     @ModelView.button
+    @filter_state('uninstalled')
     def install(cls, modules):
+        modules_install = set(modules)
         graph, packages, later = create_graph(get_module_list())
+
+        def get_parents(module):
+            parents = set(p for p in module.parents)
+            for p in module.parents:
+                parents.update(get_parents(p))
+            return parents
+
         for module in modules:
             if module.name not in graph:
                 missings = []
@@ -157,24 +174,25 @@ class Module(ModelSQL, ModelView):
                         missings = [x for x in deps if x not in graph]
                 cls.raise_user_error('missing_dep', (missings, module.name))
 
-            def get_parents(module):
-                parents = set(p.name for p in module.parents)
-                for p in module.parents:
-                    parents.update(get_parents(p))
-                return parents
-            dependencies = list(get_parents(module))
-            modules_install = cls.search([
-                    ('name', 'in', dependencies),
-                    ('state', '=', 'uninstalled'),
-                    ])
-            cls.write(modules_install + [module], {
-                    'state': 'to install',
-                    })
+            modules_install.update((m for m in get_parents(module)
+                    if m.state == 'uninstalled'))
+        cls.write(list(modules_install), {
+                'state': 'to install',
+                })
 
     @classmethod
     @ModelView.button
+    @filter_state('installed')
     def upgrade(cls, modules):
+        modules_installed = set(modules)
         graph, packages, later = create_graph(get_module_list())
+
+        def get_childs(module):
+            childs = set(c for c in module.childs)
+            for c in module.childs:
+                childs.update(get_childs(c))
+            return childs
+
         for module in modules:
             if module.name not in graph:
                 missings = []
@@ -183,24 +201,15 @@ class Module(ModelSQL, ModelView):
                         missings = [x for x in deps if x not in graph]
                 cls.raise_user_error('missing_dep', (missings, module.name))
 
-            def get_childs(name, graph):
-                childs = set(x.name for x in graph[name].childs)
-                childs2 = set()
-                for child in childs:
-                    childs2.update(get_childs(child, graph))
-                childs.update(childs2)
-                return childs
-            dependencies = list(get_childs(module.name, graph))
-            modules_installed = cls.search([
-                    ('name', 'in', dependencies),
-                    ('state', '=', 'installed'),
-                    ])
-            cls.write(modules_installed + [module], {
-                    'state': 'to upgrade',
-                    })
+            modules_installed.update((m for m in get_childs(module)
+                    if m.state == 'installed'))
+        cls.write(list(modules_installed), {
+                'state': 'to upgrade',
+                })
 
     @classmethod
     @ModelView.button
+    @filter_state('to install')
     def install_cancel(cls, modules):
         cls.write(modules, {
                 'state': 'uninstalled',
@@ -208,16 +217,17 @@ class Module(ModelSQL, ModelView):
 
     @classmethod
     @ModelView.button
+    @filter_state('installed')
     def uninstall(cls, modules):
         cursor = Transaction().cursor
         for module in modules:
-            cursor.execute('SELECT m.state, m.name ' \
-                    'FROM ir_module_module_dependency d ' \
-                    'JOIN ir_module_module m on (d.module = m.id) ' \
-                    'WHERE d.name = %s ' \
-                        'AND m.state not in ' \
-                        '(\'uninstalled\', \'to remove\')',
-                            (module.name,))
+            cursor.execute('SELECT m.state, m.name '
+                'FROM ir_module_module_dependency d '
+                'JOIN ir_module_module m on (d.module = m.id) '
+                'WHERE d.name = %s '
+                    'AND m.state not in '
+                    '(\'uninstalled\', \'to remove\')',
+                (module.name,))
             res = cursor.fetchall()
             if res:
                 cls.raise_user_error('uninstall_dep',
@@ -227,11 +237,13 @@ class Module(ModelSQL, ModelView):
 
     @classmethod
     @ModelView.button
+    @filter_state('to remove')
     def uninstall_cancel(cls, modules):
         cls.write(modules, {'state': 'installed'})
 
     @classmethod
     @ModelView.button
+    @filter_state('to upgrade')
     def upgrade_cancel(cls, modules):
         cls.write(modules, {'state': 'installed'})
 
@@ -255,10 +267,10 @@ class Module(ModelSQL, ModelView):
             tryton = get_module_info(name)
             if not tryton:
                 continue
-            module = cls.create({
-                    'name': name,
-                    'state': 'uninstalled',
-                    })
+            module, = cls.create([{
+                        'name': name,
+                        'state': 'uninstalled',
+                        }])
             count += 1
             cls._update_dependencies(module, tryton.get('depends', []))
         return count
@@ -274,12 +286,15 @@ class Module(ModelSQL, ModelView):
         # Restart Browse Cache for deleted dependencies
         module = cls(module.id)
         dependency_names = [x.name for x in module.dependencies]
+        to_create = []
         for depend in depends:
             if depend not in dependency_names:
-                Dependency.create({
+                to_create.append({
                         'module': module.id,
                         'name': depend,
                         })
+        if to_create:
+            Dependency.create(to_create)
 
 
 class ModuleDependency(ModelSQL, ModelView):
@@ -336,6 +351,7 @@ class ModuleConfigWizardItem(ModelSQL, ModelView):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         table = TableHandler(Transaction().cursor, cls, module_name)
 
         # Migrate from 2.2 remove name
@@ -374,6 +390,11 @@ class ModuleConfigWizardOther(ModelView):
         return 100.0 * done / all
 
 
+class ModuleConfigWizardDone(ModelView):
+    'Module Config Wizard Done'
+    __name__ = 'ir.module.module.config_wizard.done'
+
+
 class ModuleConfigWizard(Wizard):
     'Run config wizards'
     __name__ = 'ir.module.module.config_wizard'
@@ -410,6 +431,10 @@ class ModuleConfigWizard(Wizard):
             Button('Next', 'action', 'tryton-go-next', default=True),
             ])
     action = ConfigStateAction()
+    done = StateView('ir.module.module.config_wizard.done',
+        'ir.module_config_wizard_done_view_form', [
+            Button('Ok', 'end', 'tryton-close', default=True),
+            ])
 
     def transition_start(self):
         res = self.transition_action()
@@ -425,7 +450,7 @@ class ModuleConfigWizard(Wizard):
                 ])
         if items:
             return 'other'
-        return 'end'
+        return 'done'
 
 
 class ModuleInstallUpgradeStart(ModelView):
@@ -463,7 +488,7 @@ class ModuleInstallUpgrade(Wizard):
                 ('state', 'in', ['to upgrade', 'to remove', 'to install']),
                 ])
         return {
-            'module_info': '\n'.join(x.name + ': ' + x.state \
+            'module_info': '\n'.join(x.name + ': ' + x.state
                 for x in modules),
             }
 

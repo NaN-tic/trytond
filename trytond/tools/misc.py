@@ -11,6 +11,9 @@ from threading import local
 import smtplib
 import dis
 from decimal import Decimal
+from array import array
+from sql import Literal
+from sql.operators import Or
 from trytond.config import CONFIG
 from trytond.const import OPERATORS
 
@@ -78,7 +81,8 @@ def exec_command_pipe(name, *args):
 def file_open(name, mode="r", subdir='modules'):
     """Open a file from the root dir, using a subdir folder."""
     from trytond.modules import EGG_MODULES
-    root_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    root_path = os.path.dirname(os.path.dirname(os.path.abspath(
+                unicode(__file__, sys.getfilesystemencoding()))))
 
     egg_name = False
     if subdir == 'modules':
@@ -103,11 +107,11 @@ def file_open(name, mode="r", subdir='modules'):
                         os.path.dirname(epoint.dist.location), name)
 
     if subdir:
-        if subdir == 'modules'\
-                and (name.startswith('ir' + os.sep) \
-                    or name.startswith('res' + os.sep) \
-                    or name.startswith('webdav' + os.sep) \
-                    or name.startswith('test' + os.sep)):
+        if (subdir == 'modules'
+                and (name.startswith('ir' + os.sep)
+                    or name.startswith('res' + os.sep)
+                    or name.startswith('webdav' + os.sep)
+                    or name.startswith('tests' + os.sep))):
             name = os.path.join(root_path, name)
         else:
             name = os.path.join(root_path, subdir, name)
@@ -278,7 +282,7 @@ class LocalDict(local):
         return self._dict.get(k, d)
 
     def has_key(self, k):
-        return self._dict.has_key(k)
+        return k in self._dict
 
     def items(self):
         return self._dict.items()
@@ -322,23 +326,18 @@ class LocalDict(local):
 
 def reduce_ids(field, ids):
     '''
-    Return a small SQL clause for ids
-
-    :param field: the field of the clause
-    :param ids: the list of ids
-    :return: sql string and sql param
+    Return a small SQL expression for the list of ids and the sql column
     '''
     if not ids:
-        return '(%s)', [False]
+        return Literal(False)
     assert all(x.is_integer() for x in ids if isinstance(x, float)), \
         'ids must be integer'
     ids = map(int, ids)
     ids.sort()
     prev = ids.pop(0)
     continue_list = [prev, prev]
-    discontinue_list = []
-    sql = []
-    args = []
+    discontinue_list = array('l')
+    sql = Or()
     for i in ids:
         if i == prev:
             continue
@@ -347,9 +346,8 @@ def reduce_ids(field, ids):
                 discontinue_list.extend([continue_list[0] + x for x in
                     range(continue_list[-1] - continue_list[0] + 1)])
             else:
-                sql.append('((' + field + ' >= %s) AND (' + field + ' <= %s))')
-                args.append(continue_list[0])
-                args.append(continue_list[-1])
+                sql.append((field >= continue_list[0])
+                    & (field <= continue_list[-1]))
             continue_list = []
         continue_list.append(i)
         prev = i
@@ -357,14 +355,10 @@ def reduce_ids(field, ids):
         discontinue_list.extend([continue_list[0] + x for x in
             range(continue_list[-1] - continue_list[0] + 1)])
     else:
-        sql.append('((' + field + ' >= %s) AND (' + field + ' <= %s))')
-        args.append(continue_list[0])
-        args.append(continue_list[-1])
+        sql.append((field >= continue_list[0]) & (field <= continue_list[-1]))
     if discontinue_list:
-        sql.append('(' + field + ' IN (' + \
-                ','.join(('%s',) * len(discontinue_list)) + '))')
-        args.extend(discontinue_list)
-    return '(' + ' OR '.join(sql) + ')', args
+        sql.append(field.in_(discontinue_list))
+    return sql
 
 _ALLOWED_CODES = set(dis.opmap[x] for x in [
         'POP_TOP', 'ROT_TWO', 'ROT_THREE', 'ROT_FOUR', 'DUP_TOP', 'BUILD_LIST',

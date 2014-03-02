@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
@@ -9,26 +8,22 @@ from trytond.transaction import Transaction
 
 
 class ModelAccessTestCase(unittest.TestCase):
-    '''
-    Test Model Access
-    '''
+    'Test Model Access'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.model_access = POOL.get('ir.model.access')
         self.test_access = POOL.get('test.access')
         self.model = POOL.get('ir.model')
         self.group = POOL.get('res.group')
 
     def test0010perm_read(self):
-        '''
-        Test Read Access
-        '''
+        'Test Read Access'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             model, = self.model.search([('model', '=', 'test.access')])
 
-            test = self.test_access.create({})
+            test, = self.test_access.create([{}])
 
             # Without model access
             self.test_access.read([test.id])
@@ -36,11 +31,11 @@ class ModelAccessTestCase(unittest.TestCase):
             # With model access
 
             # One access allowed for any group
-            model_access_wo_group = self.model_access.create({
-                    'model': model.id,
-                    'group': False,
-                    'perm_read': True,
-                    })
+            model_access_wo_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': None,
+                        'perm_read': True,
+                        }])
             self.test_access.read([test.id])
 
             # One access disallowed for any group
@@ -51,11 +46,11 @@ class ModelAccessTestCase(unittest.TestCase):
 
             # Two access rules with one group allowed
             group, = self.group.search([('users', '=', USER)])
-            model_access_w_group = self.model_access.create({
-                    'model': model.id,
-                    'group': group.id,
-                    'perm_read': True,
-                    })
+            model_access_w_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': group.id,
+                        'perm_read': True,
+                        }])
 
             self.test_access.read([test.id])
 
@@ -88,7 +83,7 @@ class ModelAccessTestCase(unittest.TestCase):
             self.test_access.read([test.id])
 
             # One access allowed for one other group
-            group = self.group.create({'name': 'Test'})
+            group, = self.group.create([{'name': 'Test'}])
             self.model_access.write([model_access_w_group], {
                     'group': group.id,
                     })
@@ -101,16 +96,15 @@ class ModelAccessTestCase(unittest.TestCase):
             self.test_access.read([test.id])
 
             transaction.cursor.rollback()
+            self.model_access._get_access_cache.clear()
 
     def test0020perm_write(self):
-        '''
-        Test Write Access
-        '''
+        'Test Write Access'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             model, = self.model.search([('model', '=', 'test.access')])
 
-            test = self.test_access.create({})
+            test, = self.test_access.create([{}])
 
             # Without model access
             self.test_access.write([test], {})
@@ -118,11 +112,11 @@ class ModelAccessTestCase(unittest.TestCase):
             # With model access
 
             # One access allowed for any group
-            model_access_wo_group = self.model_access.create({
-                    'model': model.id,
-                    'group': False,
-                    'perm_write': True,
-                    })
+            model_access_wo_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': None,
+                        'perm_write': True,
+                        }])
             self.test_access.write([test], {})
 
             # One access disallowed for any group
@@ -133,11 +127,11 @@ class ModelAccessTestCase(unittest.TestCase):
 
             # Two access rules with one group allowed
             group, = self.group.search([('users', '=', USER)])
-            model_access_w_group = self.model_access.create({
-                    'model': model.id,
-                    'group': group.id,
-                    'perm_write': True,
-                    })
+            model_access_w_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': group.id,
+                        'perm_write': True,
+                        }])
             self.test_access.write([test], {})
 
             # Two access rules with both allowed
@@ -169,7 +163,7 @@ class ModelAccessTestCase(unittest.TestCase):
             self.test_access.write([test], {})
 
             # One access allowed for one other group
-            group = self.group.create({'name': 'Test'})
+            group, = self.group.create([{'name': 'Test'}])
             self.model_access.write([model_access_w_group], {
                     'group': group.id,
                     })
@@ -182,27 +176,26 @@ class ModelAccessTestCase(unittest.TestCase):
             self.test_access.write([test], {})
 
             transaction.cursor.rollback()
+            self.model_access._get_access_cache.clear()
 
     def test0030perm_create(self):
-        '''
-        Test Create Access
-        '''
+        'Test Create Access'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             model, = self.model.search([('model', '=', 'test.access')])
 
             # Without model access
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             # With model access
 
             # One access allowed for any group
-            model_access_wo_group = self.model_access.create({
-                    'model': model.id,
-                    'group': False,
-                    'perm_create': True,
-                    })
-            self.test_access.create({})
+            model_access_wo_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': None,
+                        'perm_create': True,
+                        }])
+            self.test_access.create([{}])
 
             # One access disallowed for any group
             self.model_access.write([model_access_wo_group], {
@@ -212,66 +205,65 @@ class ModelAccessTestCase(unittest.TestCase):
 
             # Two access rules with one group allowed
             group, = self.group.search([('users', '=', USER)])
-            model_access_w_group = self.model_access.create({
-                    'model': model.id,
-                    'group': group.id,
-                    'perm_create': True,
-                    })
+            model_access_w_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': group.id,
+                        'perm_create': True,
+                        }])
 
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             # Two access rules with both allowed
             self.model_access.write([model_access_wo_group], {
                     'perm_create': True,
                     })
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             # Two access rules with any group allowed
             self.model_access.write([model_access_w_group], {
                     'perm_create': False,
                     })
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             # Two access rules with both disallowed
             self.model_access.write([model_access_wo_group], {
                     'perm_create': False,
                     })
-            self.assertRaises(Exception, self.test_access.create, {})
+            self.assertRaises(Exception, self.test_access.create, [{}])
 
             # One access disallowed for one group
             self.model_access.delete([model_access_wo_group])
-            self.assertRaises(Exception, self.test_access.create, {})
+            self.assertRaises(Exception, self.test_access.create, [{}])
 
             # One access allowed for one group
             self.model_access.write([model_access_w_group], {
                     'perm_create': True,
                     })
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             # One access allowed for one other group
-            group = self.group.create({'name': 'Test'})
+            group, = self.group.create([{'name': 'Test'}])
             self.model_access.write([model_access_w_group], {
                     'group': group.id,
                     })
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             # One access disallowed for one other group
             self.model_access.write([model_access_w_group], {
                     'perm_create': False,
                     })
-            self.test_access.create({})
+            self.test_access.create([{}])
 
             transaction.cursor.rollback()
+            self.model_access._get_access_cache.clear()
 
     def test0040perm_delete(self):
-        '''
-        Test Delete Access
-        '''
+        'Test Delete Access'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             model, = self.model.search([('model', '=', 'test.access')])
 
-            tests = [self.test_access.create({}) for x in range(11)]
+            tests = [self.test_access.create([{}])[0] for x in range(11)]
 
             # Without model access
             self.test_access.delete([tests.pop()])
@@ -279,11 +271,11 @@ class ModelAccessTestCase(unittest.TestCase):
             # With model access
 
             # One access allowed for any group
-            model_access_wo_group = self.model_access.create({
-                    'model': model.id,
-                    'group': False,
-                    'perm_delete': True,
-                    })
+            model_access_wo_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': None,
+                        'perm_delete': True,
+                        }])
             self.test_access.delete([tests.pop()])
 
             # One access disallowed for any group
@@ -295,11 +287,11 @@ class ModelAccessTestCase(unittest.TestCase):
 
             # Two access rules with one group allowed
             group = self.group.search([('users', '=', USER)])[0]
-            model_access_w_group = self.model_access.create({
-                    'model': model.id,
-                    'group': group.id,
-                    'perm_delete': True,
-                    })
+            model_access_w_group, = self.model_access.create([{
+                        'model': model.id,
+                        'group': group.id,
+                        'perm_delete': True,
+                        }])
 
             self.test_access.delete([tests.pop()])
 
@@ -334,7 +326,7 @@ class ModelAccessTestCase(unittest.TestCase):
             self.test_access.delete([tests.pop()])
 
             # One access allowed for one other group
-            group = self.group.create({'name': 'Test'})
+            group, = self.group.create([{'name': 'Test'}])
             self.model_access.write([model_access_w_group], {
                     'group': group.id,
                     })
@@ -347,24 +339,21 @@ class ModelAccessTestCase(unittest.TestCase):
             self.test_access.delete([tests.pop()])
 
             transaction.cursor.rollback()
+            self.model_access._get_access_cache.clear()
 
 
 class ModelFieldAccessTestCase(unittest.TestCase):
-    '''
-    Test Model Field Access
-    '''
+    'Test Model Field Access'
 
     def setUp(self):
-        install_module('test')
+        install_module('tests')
         self.field_access = POOL.get('ir.model.field.access')
         self.test_access = POOL.get('test.access')
         self.field = POOL.get('ir.model.field')
         self.group = POOL.get('res.group')
 
     def test0010perm_read(self):
-        '''
-        Test Read Access
-        '''
+        'Test Read Access'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             field1, = self.field.search([
@@ -376,10 +365,10 @@ class ModelFieldAccessTestCase(unittest.TestCase):
                     ('name', '=', 'field2'),
                     ])
 
-            test = self.test_access.create({
-                    'field1': 'ham',
-                    'field2': 'spam',
-                    })
+            test, = self.test_access.create([{
+                        'field1': 'ham',
+                        'field2': 'spam',
+                        }])
 
             # Without field access
             self.test_access.read([test.id], ['field1'])
@@ -393,11 +382,11 @@ class ModelFieldAccessTestCase(unittest.TestCase):
             # With field access
 
             # One access allowed for any group
-            field_access_wo_group = self.field_access.create({
-                    'field': field1.id,
-                    'group': False,
-                    'perm_read': True,
-                    })
+            field_access_wo_group, = self.field_access.create([{
+                        'field': field1.id,
+                        'group': None,
+                        'perm_read': True,
+                        }])
             self.test_access.read([test.id], ['field1'])
             self.test_access.read([test.id], ['field2'])
             self.test_access.read([test.id])
@@ -422,11 +411,11 @@ class ModelFieldAccessTestCase(unittest.TestCase):
 
             # Two access rules with one group allowed
             group = self.group.search([('users', '=', USER)])[0]
-            field_access_w_group = self.field_access.create({
-                    'field': field1.id,
-                    'group': group.id,
-                    'perm_read': True,
-                    })
+            field_access_w_group, = self.field_access.create([{
+                        'field': field1.id,
+                        'group': group.id,
+                        'perm_read': True,
+                        }])
 
             self.test_access.read([test.id], ['field1'])
             self.test_access.read([test.id], ['field2'])
@@ -497,7 +486,7 @@ class ModelFieldAccessTestCase(unittest.TestCase):
             test = self.test_access(test.id)
 
             # One access allowed for one other group
-            group = self.group.create({'name': 'Test'})
+            group, = self.group.create([{'name': 'Test'}])
             self.field_access.write([field_access_w_group], {
                     'group': group.id,
                     })
@@ -524,16 +513,16 @@ class ModelFieldAccessTestCase(unittest.TestCase):
             # Two access rules on both fields allowed
             self.field_access.delete([field_access_w_group])
 
-            field_access1 = self.field_access.create({
-                    'field': field1.id,
-                    'group': False,
-                    'perm_read': True,
-                    })
-            field_access2 = self.field_access.create({
-                    'field': field2.id,
-                    'group': False,
-                    'perm_read': True,
-                    })
+            field_access1, = self.field_access.create([{
+                        'field': field1.id,
+                        'group': None,
+                        'perm_read': True,
+                        }])
+            field_access2, = self.field_access.create([{
+                        'field': field2.id,
+                        'group': None,
+                        'perm_read': True,
+                        }])
 
             self.test_access.read([test.id], ['field1'])
             self.test_access.read([test.id], ['field2'])
@@ -571,11 +560,10 @@ class ModelFieldAccessTestCase(unittest.TestCase):
             test = self.test_access(test.id)
 
             transaction.cursor.rollback()
+            self.field_access._get_access_cache.clear()
 
     def test0010perm_write(self):
-        '''
-        Test Write Access
-        '''
+        'Test Write Access'
         with Transaction().start(DB_NAME, USER,
                 context=CONTEXT) as transaction:
             field1, = self.field.search([
@@ -587,10 +575,10 @@ class ModelFieldAccessTestCase(unittest.TestCase):
                     ('name', '=', 'field2'),
                     ])
 
-            test = self.test_access.create({
-                    'field1': 'ham',
-                    'field2': 'spam',
-                    })
+            test, = self.test_access.create([{
+                        'field1': 'ham',
+                        'field2': 'spam',
+                        }])
 
             # Without field access
             self.test_access.write([test], {})
@@ -600,11 +588,11 @@ class ModelFieldAccessTestCase(unittest.TestCase):
             # With field access
 
             # One access allowed for any group
-            field_access_wo_group = self.field_access.create({
-                    'field': field1.id,
-                    'group': False,
-                    'perm_write': True,
-                    })
+            field_access_wo_group, = self.field_access.create([{
+                        'field': field1.id,
+                        'group': None,
+                        'perm_write': True,
+                        }])
             self.test_access.write([test], {})
             self.test_access.write([test], {'field1': 'ham'})
             self.test_access.write([test], {'field2': 'spam'})
@@ -629,11 +617,11 @@ class ModelFieldAccessTestCase(unittest.TestCase):
 
             # Two access rules with one group allowed
             group = self.group.search([('users', '=', USER)])[0]
-            field_access_w_group = self.field_access.create({
-                    'field': field1.id,
-                    'group': group.id,
-                    'perm_write': True,
-                    })
+            field_access_w_group, = self.field_access.create([{
+                        'field': field1.id,
+                        'group': group.id,
+                        'perm_write': True,
+                        }])
 
             self.test_access.write([test], {})
             self.test_access.write([test], {'field1': 'ham'})
@@ -704,7 +692,7 @@ class ModelFieldAccessTestCase(unittest.TestCase):
                     })
 
             # One access allowed for one other group
-            group = self.group.create({'name': 'Test'})
+            group, = self.group.create([{'name': 'Test'}])
             self.field_access.write([field_access_w_group], {
                     'group': group.id,
                     })
@@ -731,16 +719,16 @@ class ModelFieldAccessTestCase(unittest.TestCase):
             # Two access rules on both fields allowed
             self.field_access.delete([field_access_w_group])
 
-            field_access1 = self.field_access.create({
-                    'field': field1.id,
-                    'group': False,
-                    'perm_write': True,
-                    })
-            field_access2 = self.field_access.create({
-                    'field': field2.id,
-                    'group': False,
-                    'perm_write': True,
-                    })
+            field_access1, = self.field_access.create([{
+                        'field': field1.id,
+                        'group': None,
+                        'perm_write': True,
+                        }])
+            field_access2, = self.field_access.create([{
+                        'field': field2.id,
+                        'group': None,
+                        'perm_write': True,
+                        }])
 
             self.test_access.write([test], {})
             self.test_access.write([test], {'field1': 'ham'})
@@ -778,6 +766,7 @@ class ModelFieldAccessTestCase(unittest.TestCase):
                     })
 
             transaction.cursor.rollback()
+            self.field_access._get_access_cache.clear()
 
 
 def suite():
@@ -787,7 +776,3 @@ def suite():
     suite_.addTests(unittest.TestLoader(
         ).loadTestsFromTestCase(ModelFieldAccessTestCase))
     return suite_
-
-if __name__ == '__main__':
-    suite = suite()
-    unittest.TextTestRunner(verbosity=2).run(suite)

@@ -1,9 +1,12 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 from itertools import chain
-from trytond.model.fields.field import Field, size_validate
-from trytond.transaction import Transaction
-from trytond.pool import Pool
+from sql import Cast, Literal, Column
+from sql.functions import Substring, Position
+
+from .field import Field, size_validate
+from ...transaction import Transaction
+from ...pool import Pool
 
 
 def add_remove_validate(value):
@@ -21,7 +24,7 @@ class One2Many(Field):
             order=None, datetime_field=None, size=None, help='',
             required=False, readonly=False, domain=None, states=None,
             on_change=None, on_change_with=None, depends=None,
-            order_field=None, context=None, loading='lazy'):
+            context=None, loading='lazy'):
         '''
         :param model_name: The name of the target model.
         :param field: The name of the field that handle the reverse many2one or
@@ -42,8 +45,7 @@ class One2Many(Field):
         super(One2Many, self).__init__(string=string, help=help,
             required=required, readonly=readonly, domain=domain, states=states,
             on_change=on_change, on_change_with=on_change_with,
-            depends=depends, order_field=order_field, context=context,
-            loading=loading)
+            depends=depends, context=context, loading=loading)
         self.model_name = model_name
         self.field = field
         self.__add_remove = None
@@ -79,14 +81,12 @@ class One2Many(Field):
         '''
         pool = Pool()
         Relation = pool.get(self.model_name)
-        if self.field in Relation._fields:
-            field = Relation._fields[self.field]
-        else:
-            field = Relation._inherit_fields[self.field][2]
+        field = Relation._fields[self.field]
         res = {}
         for i in ids:
             res[i] = []
-        ids2 = []
+
+        targets = []
         for i in range(0, len(ids), Transaction().cursor.IN_MAX):
             sub_ids = ids[i:i + Transaction().cursor.IN_MAX]
             if field._type == 'reference':
@@ -94,131 +94,118 @@ class One2Many(Field):
                 clause = [(self.field, 'in', references)]
             else:
                 clause = [(self.field, 'in', sub_ids)]
-            ids2.append(map(int, Relation.search(clause, order=self.order)))
+            targets.append(Relation.search(clause, order=self.order))
+        targets = list(chain(*targets))
 
-        cache = Transaction().cursor.get_cache(Transaction().context)
-        cache.setdefault(self.model_name, {})
-        ids3 = []
-        for i in chain(*ids2):
-            if i in cache[self.model_name] \
-                    and self.field in cache[self.model_name][i]:
-                if field._type == 'reference':
-                    _, id_ = cache[self.model_name][i][self.field].split(',')
-                    id_ = int(id_)
-                else:
-                    id_ = cache[self.model_name][i][self.field]
-                res[id_].append(i)
-            else:
-                ids3.append(i)
+        for target in targets:
+            origin_id = getattr(target, self.field).id
+            res[origin_id].append(target.id)
+        return dict((key, tuple(value)) for key, value in res.iteritems())
 
-        if ids3:
-            for i in Relation.read(ids3, [self.field]):
-                if field._type == 'reference':
-                    _, id_ = i[self.field].split(',')
-                    id_ = int(id_)
-                else:
-                    id_ = i[self.field]
-                res[id_].append(i['id'])
-
-        index_of_ids2 = dict((i, index)
-            for index, i in enumerate(chain(*ids2)))
-        for id_, val in res.iteritems():
-            res[id_] = tuple(sorted(val, key=lambda x: index_of_ids2[x]))
-        return res
-
-    def set(self, ids, model, name, values):
+    def set(self, Model, name, ids, values, *args):
         '''
         Set the values.
         values: A list of tuples:
-            (``create``, ``{<field name>: value}``),
-            (``write``, ``<ids>``, ``{<field name>: value}``),
+            (``create``, ``[{<field name>: value}, ...]``),
+            (``write``, [``<ids>``, ``{<field name>: value}``, ...]),
             (``delete``, ``<ids>``),
-            (``delete_all``),
-            (``unlink``, ``<ids>``),
             (``add``, ``<ids>``),
-            (``unlink_all``),
-            (``set``, ``<ids>``)
+            (``remove``, ``<ids>``),
+            (``copy``, ``<ids>``, ``[{<field name>: value}, ...]``)
         '''
-        if not values:
-            return
         Target = self.get_target()
-        if self.field in Target._fields:
-            field = Target._fields[self.field]
-        else:
-            field = Target._inherit_fields[self.field][2]
+        field = Target._fields[self.field]
+        to_create = []
+        to_write = []
+        to_delete = []
 
         def search_clause(ids):
             if field._type == 'reference':
-                references = ['%s,%s' % (model.__name__, x) for x in ids]
+                references = ['%s,%s' % (Model.__name__, x) for x in ids]
                 return (self.field, 'in', references)
             else:
                 return (self.field, 'in', ids)
 
         def field_value(record_id):
             if field._type == 'reference':
-                return '%s,%s' % (model.__name__, record_id)
+                return '%s,%s' % (Model.__name__, record_id)
             else:
                 return record_id
 
-        for act in values:
-            if act[0] == 'create':
-                for record_id in ids:
-                    act[1][self.field] = field_value(record_id)
-                    Target.create(act[1])
-            elif act[0] == 'write':
-                Target.write(Target.browse(act[1]), act[2])
-            elif act[0] == 'delete':
-                Target.delete(Target.browse(act[1]))
-            elif act[0] == 'delete_all':
-                targets = Target.search([
-                        search_clause(ids),
-                        ])
-                Target.delete(targets)
-            elif act[0] == 'unlink':
-                target_ids = map(int, act[1])
-                if not target_ids:
-                    continue
-                targets = Target.search([
-                        search_clause(ids),
-                        ('id', 'in', target_ids),
-                        ])
-                Target.write(targets, {
-                        self.field: None,
-                        })
-            elif act[0] == 'add':
-                target_ids = map(int, act[1])
-                if not target_ids:
-                    continue
-                for record_id in ids:
-                    Target.write(Target.browse(target_ids), {
+        def create(ids, vlist):
+            for record_id in ids:
+                value = field_value(record_id)
+                for values in vlist:
+                    values = values.copy()
+                    values[self.field] = value
+                    to_create.append(values)
+
+        def write(_, *args):
+            actions = iter(args)
+            to_write.extend(sum(((Target.browse(ids), values)
+                        for ids, values in zip(actions, actions)), ()))
+
+        def delete(_, target_ids):
+            to_delete.extend(Target.browse(target_ids))
+
+        def add(ids, target_ids):
+            target_ids = map(int, target_ids)
+            if not target_ids:
+                return
+            targets = Target.browse(target_ids)
+            for record_id in ids:
+                to_write.extend((targets, {
                             self.field: field_value(record_id),
-                            })
-            elif act[0] == 'unlink_all':
+                            }))
+
+        def remove(ids, target_ids):
+            target_ids = map(int, target_ids)
+            if not target_ids:
+                return
+            in_max = Transaction().cursor.IN_MAX
+            for i in range(0, len(target_ids), in_max):
+                sub_ids = target_ids[i:i + in_max]
                 targets = Target.search([
                         search_clause(ids),
+                        ('id', 'in', sub_ids),
                         ])
-                Target.write(targets, {
-                        self.field: None,
-                        })
-            elif act[0] == 'set':
-                if not act[1]:
-                    target_ids = [-1]
-                else:
-                    target_ids = map(int, act[1])
-                for record_id in ids:
-                    targets = Target.search([
-                            search_clause([record_id]),
-                            ('id', 'not in', target_ids),
-                            ])
-                    Target.write(targets, {
+                to_write.extend((targets, {
                             self.field: None,
-                            })
-                    if act[1]:
-                        Target.write(Target.browse(target_ids), {
-                                self.field: field_value(record_id),
-                                })
-            else:
-                raise Exception('Bad arguments')
+                            }))
+
+        def copy(ids, copy_ids, default=None):
+            copy_ids = map(int, copy_ids)
+
+            if default is None:
+                default = {}
+            default = default.copy()
+            copies = Target.browse(copy_ids)
+            for record_id in ids:
+                default[self.field] = field_value(record_id)
+                Target.copy(copies, default=default)
+
+        actions = {
+            'create': create,
+            'write': write,
+            'delete': delete,
+            'add': add,
+            'remove': remove,
+            'copy': copy,
+            }
+        args = iter((ids, values) + args)
+        for ids, values in zip(args, args):
+            if not values:
+                continue
+            for value in values:
+                action = value[0]
+                args = value[1:]
+                actions[action](ids, *args)
+        if to_create:
+            Target.create(to_create)
+        if to_write:
+            Target.write(*to_write)
+        if to_delete:
+            Target.delete(to_delete)
 
     def get_target(self):
         'Return the target Model'
@@ -236,3 +223,43 @@ class One2Many(Field):
                 return Target(data)
         value = [instance(x) for x in (value or [])]
         super(One2Many, self).__set__(inst, value)
+
+    def convert_domain(self, domain, tables, Model):
+        Target = self.get_target()
+        target = Target.__table__()
+        table, _ = tables[None]
+        name, operator, value = domain[:3]
+
+        origin_field = Target._fields[self.field]
+        origin = Column(target, self.field)
+        origin_where = None
+        if origin_field._type == 'reference':
+            origin_where = origin.like(Model.__name__ + ',%')
+            origin = Cast(Substring(origin,
+                    Position(',', origin) + Literal(1)),
+                Target.id.sql_type().base)
+
+        if '.' not in name:
+            if value is None:
+                where = origin != value
+                if origin_where:
+                    where &= origin_where
+                query = target.select(origin, where=where)
+                expression = ~table.id.in_(query)
+                if operator == '!=':
+                    return ~expression
+                return expression
+            else:
+                if isinstance(value, basestring):
+                    target_name = 'rec_name'
+                else:
+                    target_name = 'id'
+        else:
+            _, target_name = name.split('.', 1)
+        target_domain = [(target_name,) + tuple(domain[1:])]
+        query = Target.search(target_domain, order=[], query=True)
+        where = target.id.in_(query)
+        if origin_where:
+            where &= origin_where
+        query = target.select(origin, where=where)
+        return table.id.in_(query)

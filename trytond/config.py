@@ -11,7 +11,8 @@ except ImportError:
     sys.modules['cdecimal'] = decimal
 import os
 import ConfigParser
-import time
+import getpass
+import socket
 
 
 def get_hostname(netloc):
@@ -69,6 +70,8 @@ class ConfigManager(object):
             'smtp_tls': False,
             'smtp_user': False,
             'smtp_password': False,
+            'smtp_default_from_email': '%s@%s' % (
+                getpass.getuser(), socket.getfqdn()),
             'data_path': '/var/lib/trytond',
             'multi_server': False,
             'session_timeout': 600,
@@ -80,14 +83,8 @@ class ConfigManager(object):
             'unoconv': 'pipe,name=trytond;urp;StarOffice.ComponentContext',
             'retry': 5,
             'language': 'en_US',
-            'timezone': time.tzname[0] or time.tzname[1],
         }
         self.configfile = None
-
-    def set_timezone(self):
-        os.environ['TZ'] = self.get('timezone')
-        if hasattr(time, 'tzset'):
-            time.tzset()
 
     def update_cmdline(self, cmdline_options):
         self.options.update(cmdline_options)
@@ -104,15 +101,17 @@ class ConfigManager(object):
 
     def update_etc(self, configfile=None):
         if configfile is None:
-            prefixdir = os.path.abspath(os.path.normpath(os.path.join(
-                os.path.dirname(sys.prefix), '..')))
-            configfile = os.path.join(prefixdir, 'etc', 'trytond.conf')
-            if not os.path.isfile(configfile):
-                configdir = os.path.abspath(os.path.normpath(os.path.join(
-                    os.path.dirname(__file__), '..')))
-                configfile = os.path.join(configdir, 'etc', 'trytond.conf')
-            if not os.path.isfile(configfile):
-                configfile = None
+            configfile = os.environ.get('TRYTOND_CONFIG')
+            if not configfile:
+                prefixdir = os.path.abspath(os.path.normpath(os.path.join(
+                    os.path.dirname(sys.prefix), '..')))
+                configfile = os.path.join(prefixdir, 'etc', 'trytond.conf')
+                if not os.path.isfile(configfile):
+                    configdir = os.path.abspath(os.path.normpath(os.path.join(
+                        os.path.dirname(__file__), '..')))
+                    configfile = os.path.join(configdir, 'etc', 'trytond.conf')
+                if not os.path.isfile(configfile):
+                    configfile = None
 
         self.configfile = configfile
         if not self.configfile:

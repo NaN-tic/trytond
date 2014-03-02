@@ -73,8 +73,8 @@ class Group(ModelSQL, ModelView):
         return new_groups
 
     @classmethod
-    def create(cls, vals):
-        res = super(Group, cls).create(vals)
+    def create(cls, vlist):
+        res = super(Group, cls).create(vlist)
         pool = Pool()
         # Restart the cache on the domain_get method
         pool.get('ir.rule')._domain_get_cache.clear()
@@ -82,11 +82,15 @@ class Group(ModelSQL, ModelView):
         pool.get('res.user')._get_groups_cache.clear()
         # Restart the cache for get_preferences
         pool.get('res.user')._get_preferences_cache.clear()
+        # Restart the cache for model access and view
+        pool.get('ir.model.access')._get_access_cache.clear()
+        pool.get('ir.model.field.access')._get_access_cache.clear()
+        ModelView._fields_view_get_cache.clear()
         return res
 
     @classmethod
-    def write(cls, groups, vals):
-        super(Group, cls).write(groups, vals)
+    def write(cls, groups, values, *args):
+        super(Group, cls).write(groups, values, *args)
         pool = Pool()
         # Restart the cache on the domain_get method
         pool.get('ir.rule')._domain_get_cache.clear()
@@ -94,6 +98,10 @@ class Group(ModelSQL, ModelView):
         pool.get('res.user')._get_groups_cache.clear()
         # Restart the cache for get_preferences
         pool.get('res.user')._get_preferences_cache.clear()
+        # Restart the cache for model access and view
+        pool.get('ir.model.access')._get_access_cache.clear()
+        pool.get('ir.model.field.access')._get_access_cache.clear()
+        ModelView._fields_view_get_cache.clear()
 
     @classmethod
     def delete(cls, groups):
@@ -105,6 +113,10 @@ class Group(ModelSQL, ModelView):
         pool.get('res.user')._get_groups_cache.clear()
         # Restart the cache for get_preferences
         pool.get('res.user')._get_preferences_cache.clear()
+        # Restart the cache for model access and view
+        pool.get('ir.model.access')._get_access_cache.clear()
+        pool.get('ir.model.field.access')._get_access_cache.clear()
+        ModelView._fields_view_get_cache.clear()
 
 
 class Group2:

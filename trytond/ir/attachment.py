@@ -1,14 +1,12 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 import os
-try:
-    import hashlib
-except ImportError:
-    hashlib = None
-    import md5
+import hashlib
+from sql.operators import Concat
+
 from ..model import ModelView, ModelSQL, fields
 from ..config import CONFIG
-from ..backend import TableHandler
+from .. import backend
 from ..transaction import Transaction
 from ..pyson import Eval
 from ..pool import Pool
@@ -37,8 +35,7 @@ class Attachment(ModelSQL, ModelView):
                 'invisible': Eval('type') != 'data',
                 }, depends=['type']), 'get_data', setter='set_data')
     description = fields.Text('Description')
-    summary = fields.Function(fields.Char('Summary',
-        on_change_with=['description']), 'on_change_with_summary')
+    summary = fields.Function(fields.Char('Summary'), 'on_change_with_summary')
     resource = fields.Reference('Resource', selection='models_get',
         select=True)
     link = fields.Char('Link', states={
@@ -64,19 +61,23 @@ class Attachment(ModelSQL, ModelView):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
 
         super(Attachment, cls).__register__(module_name)
 
         table = TableHandler(cursor, cls, module_name)
+        attachment = cls.__table__()
 
         # Migration from 1.4 res_model and res_id merged into resource
         # Reference
         if table.column_exist('res_model') and \
                 table.column_exist('res_id'):
             table.drop_constraint('res_model_res_id_name')
-            cursor.execute('UPDATE "%s" '
-            'SET "resource" = "res_model"||\',\'||"res_id"' % cls._table)
+            cursor.execute(*attachment.update(
+                    [attachment.resource],
+                    [Concat(Concat(attachment.resource, ','),
+                            attachment.res_id)]))
             table.drop_column('res_model')
             table.drop_column('res_id')
 
@@ -96,10 +97,13 @@ class Attachment(ModelSQL, ModelView):
     def models_get():
         pool = Pool()
         Model = pool.get('ir.model')
+        ModelAccess = pool.get('ir.model.access')
         models = Model.search([])
+        access = ModelAccess.get_access([m.model for m in models])
         res = []
         for model in models:
-            res.append([model.model, model.name])
+            if access[model.model]['read']:
+                res.append([model.model, model.name])
         return res
 
     def get_data(self, name):
@@ -134,14 +138,12 @@ class Attachment(ModelSQL, ModelView):
         if value is None:
             return
         cursor = Transaction().cursor
+        table = cls.__table__()
         db_name = cursor.dbname
         directory = os.path.join(CONFIG['data_path'], db_name)
         if not os.path.isdir(directory):
             os.makedirs(directory, 0770)
-        if hashlib:
-            digest = hashlib.md5(value).hexdigest()
-        else:
-            digest = md5.new(value).hexdigest()
+        digest = hashlib.md5(value).hexdigest()
         directory = os.path.join(directory, digest[0:2], digest[2:4])
         if not os.path.isdir(directory):
             os.makedirs(directory, 0770)
@@ -151,11 +153,11 @@ class Attachment(ModelSQL, ModelView):
             with open(filename, 'rb') as file_p:
                 data = file_p.read()
             if value != data:
-                cursor.execute('SELECT DISTINCT(collision) '
-                    'FROM ir_attachment '
-                    'WHERE digest = %s '
-                        'AND collision != 0 '
-                    'ORDER BY collision', (digest,))
+                cursor.execute(*table.select(table.collision,
+                        where=(table.digest == digest)
+                        & (table.collision != 0),
+                        group_by=table.collision,
+                        order_by=table.collision))
                 collision2 = 0
                 for row in cursor.fetchall():
                     collision2 = row[0]
@@ -181,6 +183,7 @@ class Attachment(ModelSQL, ModelView):
             'collision': collision,
             })
 
+    @fields.depends('description')
     def on_change_with_summary(self, name=None):
         return firstline(self.description or '')
 
@@ -221,16 +224,20 @@ class Attachment(ModelSQL, ModelView):
         super(Attachment, cls).delete(attachments)
 
     @classmethod
-    def write(cls, attachments, vals):
-        cls.check_access([a.id for a in attachments], mode='write')
-        super(Attachment, cls).write(attachments, vals)
-        cls.check_access(attachments, mode='write')
+    def write(cls, attachments, values, *args):
+        all_attachments = []
+        actions = iter((attachments, values) + args)
+        for records, _ in zip(actions, actions):
+            all_attachments += records
+        cls.check_access([a.id for a in all_attachments], mode='write')
+        super(Attachment, cls).write(attachments, values, *args)
+        cls.check_access(all_attachments, mode='write')
 
     @classmethod
-    def create(cls, vals):
-        attachment = super(Attachment, cls).create(vals)
-        cls.check_access([attachment.id], mode='create')
-        return attachment
+    def create(cls, vlist):
+        attachments = super(Attachment, cls).create(vlist)
+        cls.check_access([a.id for a in attachments], mode='create')
+        return attachments
 
     @classmethod
     def view_header_get(cls, value, view_type='form'):

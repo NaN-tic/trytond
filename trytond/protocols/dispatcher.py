@@ -5,15 +5,13 @@ import traceback
 import logging
 import time
 import sys
-try:
-    import hashlib
-except ImportError:
-    hashlib = None
-    import sha
 import pydoc
+
+from sql import Table, Flavor
+
 from trytond.pool import Pool
 from trytond import security
-from trytond.backend import Database, DatabaseOperationalError
+from trytond import backend
 from trytond.config import CONFIG
 from trytond.version import VERSION
 from trytond.transaction import Transaction
@@ -23,9 +21,16 @@ from trytond.exceptions import UserError, UserWarning, NotLogged, \
 from trytond.rpc import RPC
 
 
+ir_configuration = Table('ir_configuration')
+ir_lang = Table('ir_lang')
+ir_module = Table('ir_module')
+res_user = Table('res_user')
+
+
 def dispatch(host, port, protocol, database_name, user, session, object_type,
         object_name, method, *args, **kwargs):
-
+    Database = backend.get('Database')
+    DatabaseOperationalError = backend.get('DatabaseOperationalError')
     if object_type == 'common':
         if method == 'login':
             try:
@@ -38,21 +43,19 @@ def dispatch(host, port, protocol, database_name, user, session, object_type,
             Cache.clean(database_name)
             logger = logging.getLogger('dispatcher')
             msg = res and 'successful login' or 'bad login or password'
-            logger.info('%s \'%s\' from %s:%d using %s on database \'%s\'' % \
-                    (msg, user, host, port, protocol, database_name))
+            logger.info('%s \'%s\' from %s:%d using %s on database \'%s\''
+                % (msg, user, host, port, protocol, database_name))
             Cache.resets(database_name)
             return res or False
         elif method == 'logout':
             name = security.logout(database_name, user, session)
             logger = logging.getLogger('dispatcher')
-            logger.info('logout \'%s\' from %s:%d ' \
-                    'using %s on database \'%s\'' %
-                    (name, host, port, protocol, database_name))
+            logger.info(('logout \'%s\' from %s:%d '
+                    'using %s on database \'%s\'')
+                % (name, host, port, protocol, database_name))
             return True
         elif method == 'version':
             return VERSION
-        elif method == 'timezone_get':
-            return CONFIG['timezone']
         elif method == 'list_lang':
             return [
                 ('bg_BG', 'Български'),
@@ -64,8 +67,10 @@ def dispatch(host, port, protocol, database_name, user, session, object_type,
                 ('es_ES', 'Español (España)'),
                 ('es_CO', 'Español (Colombia)'),
                 ('fr_FR', 'Français'),
+                ('lt_LT', 'Lietuvių'),
                 ('nl_NL', 'Nederlands'),
                 ('ru_RU', 'Russian'),
+                ('sl_SI', 'Slovenščina'),
             ]
         elif method == 'db_exist':
             try:
@@ -78,16 +83,8 @@ def dispatch(host, port, protocol, database_name, user, session, object_type,
         elif method == 'list':
             if CONFIG['prevent_dblist']:
                 raise Exception('AccessDenied')
-            database = Database().connect()
-            try:
-                cursor = database.cursor()
-                try:
-                    res = database.list(cursor)
-                finally:
-                    cursor.close(close=True)
-            except Exception:
-                res = []
-            return res
+            with Transaction().start(None, 0, close=True) as transaction:
+                return transaction.database.list(transaction.cursor)
         elif method == 'create':
             return create(*args, **kwargs)
         elif method == 'restore':
@@ -124,7 +121,14 @@ def dispatch(host, port, protocol, database_name, user, session, object_type,
             obj = pool.get(object_name, type=object_type)
             return pydoc.getdoc(getattr(obj, method))
 
-    user = security.check(database_name, user, session)
+    for count in range(int(CONFIG['retry']), -1, -1):
+        try:
+            user = security.check(database_name, user, session)
+        except DatabaseOperationalError:
+            if count:
+                continue
+            raise
+        break
 
     Cache.clean(database_name)
     database_list = Pool.database_list()
@@ -179,17 +183,16 @@ def dispatch(host, port, protocol, database_name, user, session, object_type,
                             database_name) + tb_s)
                 transaction.cursor.rollback()
                 raise
-        if not (object_name == 'res.request' and method == 'request_get'):
-            with Transaction().start(database_name, 0) as transaction:
-                pool = Pool(database_name)
-                Session = pool.get('ir.session')
-                try:
-                    Session.reset(session)
-                except DatabaseOperationalError:
-                    # Silently fail when reseting session
-                    transaction.cursor.rollback()
-                else:
-                    transaction.cursor.commit()
+        with Transaction().start(database_name, 0) as transaction:
+            pool = Pool(database_name)
+            Session = pool.get('ir.session')
+            try:
+                Session.reset(session)
+            except DatabaseOperationalError:
+                # Silently fail when reseting session
+                transaction.cursor.rollback()
+            else:
+                transaction.cursor.commit()
         Cache.resets(database_name)
         return result
 
@@ -204,51 +207,43 @@ def create(database_name, password, lang, admin_password):
     :param admin_password: the admin password
     :return: True if succeed
     '''
+    Database = backend.get('Database')
     security.check_super(password)
     res = False
     logger = logging.getLogger('database')
 
     try:
-        database = Database().connect()
-        cursor = database.cursor(autocommit=True)
-        try:
-            database.create(cursor, database_name)
-            cursor.commit()
-            cursor.close(close=True)
-        except Exception:
-            cursor.close()
-            raise
+        with Transaction().start(None, 0, close=True, autocommit=True) \
+            as transaction:
+            transaction.database.create(transaction.cursor, database_name)
+            transaction.cursor.commit()
 
         with Transaction().start(database_name, 0) as transaction:
-            database.init(transaction.cursor)
+            Database.init(transaction.cursor)
+            transaction.cursor.execute(*ir_configuration.insert(
+                    [ir_configuration.language], [[lang]]))
             transaction.cursor.commit()
 
         pool = Pool(database_name)
         pool.init(update=True, lang=[lang])
         with Transaction().start(database_name, 0) as transaction:
-            cursor = transaction.cursor
-            #XXX replace with model write
-            cursor.execute('UPDATE ir_lang ' \
-                    'SET translatable = %s ' \
-                    'WHERE code = %s', (True, lang))
-            cursor.execute('UPDATE res_user ' \
-                    'SET language = (' + \
-                        cursor.limit_clause('SELECT id FROM ir_lang ' \
-                        'WHERE code = %s', 1) + ')' \
-                    'WHERE login <> \'root\'', (lang,))
-            if hashlib:
-                admin_password = hashlib.sha1(admin_password.encode('utf-8'))\
-                    .hexdigest()
-            else:
-                admin_password = sha.new(admin_password.encode('utf-8'))\
-                    .hexdigest()
-            cursor.execute('UPDATE res_user ' \
-                    'SET password = %s ' \
-                    'WHERE login = \'admin\'', (admin_password,))
+            User = pool.get('res.user')
+            Lang = pool.get('ir.lang')
+            language, = Lang.search([('code', '=', lang)])
+            language.translatable = True
+            language.save()
+            users = User.search([('login', '!=', 'root')])
+            User.write(users, {
+                    'language': language.id,
+                    })
+            admin, = User.search([('login', '=', 'admin')])
+            User.write([admin], {
+                    'password': admin_password,
+                    })
             Module = pool.get('ir.module.module')
             if Module:
                 Module.update_list()
-            cursor.commit()
+            transaction.cursor.commit()
             res = True
     except Exception:
         logger.error('CREATE DB: %s failed' % (database_name,))
@@ -261,17 +256,18 @@ def create(database_name, password, lang, admin_password):
 
 
 def drop(database_name, password):
+    Database = backend.get('Database')
     security.check_super(password)
     Database(database_name).close()
     # Sleep to let connections close
     time.sleep(1)
     logger = logging.getLogger('database')
 
-    database = Database().connect()
-    cursor = database.cursor(autocommit=True)
-    try:
+    with Transaction().start(None, 0, close=True, autocommit=True) \
+        as transaction:
+        cursor = transaction.cursor
         try:
-            database.drop(cursor, database_name)
+            Database.drop(cursor, database_name)
             cursor.commit()
         except Exception:
             logger.error('DROP DB: %s failed' % (database_name,))
@@ -281,12 +277,11 @@ def drop(database_name, password):
         else:
             logger.info('DROP DB: %s' % (database_name))
             Pool.stop(database_name)
-    finally:
-        cursor.close(close=True)
     return True
 
 
 def dump(database_name, password):
+    Database = backend.get('Database')
     security.check_super(password)
     Database(database_name).close()
     # Sleep to let connections close
@@ -299,6 +294,7 @@ def dump(database_name, password):
 
 
 def restore(database_name, password, data, update=False):
+    Database = backend.get('Database')
     logger = logging.getLogger('database')
     security.check_super(password)
     try:
@@ -312,12 +308,11 @@ def restore(database_name, password, data, update=False):
     logger.info('RESTORE DB: %s' % (database_name))
     if update:
         cursor = Database(database_name).connect().cursor()
-        cursor.execute('SELECT code FROM ir_lang ' \
-                'WHERE translatable')
+        cursor.execute(*ir_lang.select(ir_lang.code,
+                where=ir_lang.translatable))
         lang = [x[0] for x in cursor.fetchall()]
-        cursor.execute('UPDATE ir_module_module SET ' \
-                "state = 'to upgrade' " \
-                "WHERE state = 'installed'")
+        cursor.execute(*ir_module.update([ir_module.state], ['to upgrade'],
+                where=(ir_module.state == 'installed')))
         cursor.commit()
         cursor.close()
         Pool(database_name).init(update=update, lang=lang)

@@ -25,7 +25,7 @@ from trytond.config import CONFIG
 from trytond.security import login
 from trytond.version import PACKAGE, VERSION, WEBSITE
 from trytond.tools.misc import LocalDict
-from trytond.backend import Database
+from trytond import backend
 from trytond.pool import Pool
 from trytond.transaction import Transaction
 from trytond.cache import Cache
@@ -61,10 +61,7 @@ def setupConfig():
             return bool(self.get(name))
 
         def get(self, name, default=None):
-            try:
-                return self[name]
-            except Exception:
-                return default
+            return getattr(self, name, default)
 
     class Config:
         DAV = ConfigDAV()
@@ -88,8 +85,7 @@ class SecureThreadedHTTPServer(BaseThreadedHTTPServer):
 
     def __init__(self, server_address, HandlerClass):
         BaseThreadedHTTPServer.__init__(self, server_address, HandlerClass)
-        self.socket = SSLSocket(socket.socket(self.address_family,
-                                              self.socket_type))
+        self.socket = socket.socket(self.address_family, self.socket_type)
         self.server_bind()
         self.server_activate()
 
@@ -161,7 +157,7 @@ class TrytonDAVInterface(iface.dav_interface):
         res = []
         dbname, dburi = self._get_dburi(uri)
         if not dbname:
-            database = Database().connect()
+            database = backend.get('Database')().connect()
             cursor = database.cursor()
             try:
                 lists = database.list(cursor)
@@ -197,14 +193,14 @@ class TrytonDAVInterface(iface.dav_interface):
     def get_data(self, uri, range=None):
         dbname, dburi = self._get_dburi(uri)
         if not dbname or (self.exists(uri) and self.is_collection(uri)):
-            res = '<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 '\
-                    'Transitional//EN">'
+            res = ('<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.0 '
+                'Transitional//EN">')
             res += '<html>'
             res += '<head>'
-            res += '<meta http-equiv="Content-Type" content="text/html; '\
-                    'charset=utf-8">'
-            res += '<title>%s - WebDAV - %s</title>' \
-                    % (PACKAGE, dbname or 'root')
+            res += ('<meta http-equiv="Content-Type" content="text/html; '
+                'charset=utf-8">')
+            res += ('<title>%s - WebDAV - %s</title>'
+                % (PACKAGE, dbname or 'root'))
             res += '</head>'
             res += '<body>'
             res += '<h2>Collection: %s</h2>' % (get_urifilename(uri) or '/')
@@ -214,18 +210,18 @@ class TrytonDAVInterface(iface.dav_interface):
                     urlparse.urlparse(uri)
                 if path[-1:] != '/':
                     path += '/'
-                res += '<li><a href="%s">..</a></li>' \
-                        % urlparse.urlunparse((scheme, netloc, path + '..',
-                            params, query, fragment))
+                res += ('<li><a href="%s">..</a></li>'
+                    % urlparse.urlunparse((scheme, netloc, path + '..',
+                            params, query, fragment)))
             childs = self.get_childs(uri)
             childs.sort()
             for child in childs:
-                res += '<li><a href="%s">%s</a></li>' \
-                        % (quote_uri(child), get_urifilename(child))
+                res += ('<li><a href="%s">%s</a></li>'
+                    % (quote_uri(child), get_urifilename(child)))
             res += '</ul>'
             res += '<hr noshade>'
-            res += '<em>Powered by <a href="%s">%s</a> version %s</em>' \
-                    % (quote_uri(WEBSITE), PACKAGE, VERSION)
+            res += ('<em>Powered by <a href="%s">%s</a> version %s</em>'
+                % (quote_uri(WEBSITE), PACKAGE, VERSION))
             res += '</body>'
             res += '</html>'
             return res
@@ -558,7 +554,7 @@ class WebDAVAuthRequestHandler(WebDAVServer.DAVRequestHandler):
     def get_userinfo(self, user, password, command=''):
         path = urlparse.urlparse(self.path).path
         dbname = urllib.unquote_plus(path.split('/', 2)[1])
-        database = Database().connect()
+        database = backend.get('Database')().connect()
         cursor = database.cursor()
         databases = database.list(cursor)
         cursor.close()
@@ -593,6 +589,5 @@ class WebDAVAuthRequestHandler(WebDAVServer.DAVRequestHandler):
 class SecureWebDAVAuthRequestHandler(WebDAVAuthRequestHandler):
 
     def setup(self):
-        self.connection = SSLSocket(self.request)
-        self.rfile = socket._fileobject(self.request, "rb", self.rbufsize)
-        self.wfile = socket._fileobject(self.request, "wb", self.wbufsize)
+        self.request = SSLSocket(self.request)
+        WebDAVAuthRequestHandler.setup(self)

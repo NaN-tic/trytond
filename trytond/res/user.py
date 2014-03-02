@@ -4,20 +4,25 @@
 import copy
 import string
 import random
-try:
-    import hashlib
-except ImportError:
-    hashlib = None
-    import sha
+import hashlib
 import time
 import datetime
 from itertools import groupby, ifilter
 from operator import attrgetter
+from sql import Literal
+from sql.conditionals import Coalesce
+from sql.aggregate import Count
+from sql.operators import Concat
+
+try:
+    import bcrypt
+except ImportError:
+    bcrypt = None
 
 from ..model import ModelView, ModelSQL, fields
 from ..wizard import Wizard, StateView, Button, StateTransition
 from ..tools import safe_eval
-from ..backend import TableHandler
+from .. import backend
 from ..transaction import Transaction
 from ..cache import Cache
 from ..pool import Pool
@@ -25,14 +30,8 @@ from ..config import CONFIG
 from ..pyson import PYSONEncoder
 from ..rpc import RPC
 
-try:
-    import pytz
-    TIMEZONES = [(x, x) for x in pytz.common_timezones]
-except ImportError:
-    TIMEZONES = []
-
 __all__ = [
-    'User', 'UserAction', 'UserGroup', 'Warning_',
+    'User', 'LoginAttempt', 'UserAction', 'UserGroup', 'Warning_',
     'UserConfigStart', 'UserConfig',
     ]
 
@@ -42,9 +41,9 @@ class User(ModelSQL, ModelView):
     __name__ = "res.user"
     name = fields.Char('Name', required=True, select=True, translate=True)
     login = fields.Char('Login', required=True)
-    login_try = fields.Integer('Login Try', required=True)
-    password = fields.Sha('Password')
-    salt = fields.Char('Salt', size=8)
+    password_hash = fields.Char('Password Hash')
+    password = fields.Function(fields.Char('Password'), getter='get_password',
+        setter='set_password')
     signature = fields.Text('Signature')
     active = fields.Boolean('Active')
     menu = fields.Many2One('ir.action', 'Menu Action',
@@ -60,11 +59,9 @@ class User(ModelSQL, ModelView):
     language = fields.Many2One('ir.lang', 'Language',
         domain=['OR',
             ('translatable', '=', True),
-            ('code', '=', CONFIG['language']),
             ])
     language_direction = fields.Function(fields.Char('Language Direction'),
             'get_language_direction')
-    timezone = fields.Selection(TIMEZONES, 'Timezone', translate=False)
     email = fields.Char('Email')
     status_bar = fields.Function(fields.Char('Status Bar'), 'get_status_bar')
     warnings = fields.One2Many('res.user.warning', 'user', 'Warnings')
@@ -100,21 +97,22 @@ class User(ModelSQL, ModelView):
         cls._context_fields = [
             'language',
             'language_direction',
-            'timezone',
             'groups',
         ]
         cls._error_messages.update({
-            'rm_root': 'You can not remove the root user\n' \
-                            'as it is used internally for resources\n' \
-                            'created by the system ' \
-                            '(updates, module installation, ...)',
+            'rm_root': ('You can not remove the root user\n'
+                    'as it is used internally for resources\n'
+                    'created by the system '
+                    '(updates, module installation, ...)'),
             'wrong_password': 'Wrong password!',
             })
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
+        cursor = Transaction().cursor
         super(User, cls).__register__(module_name)
-        table = TableHandler(Transaction().cursor, cls, module_name)
+        table = TableHandler(cursor, cls, module_name)
 
         # Migration from 1.6
 
@@ -134,13 +132,19 @@ class User(ModelSQL, ModelView):
         # Migration from 2.2
         table.not_null_action('menu', action='remove')
 
-    @staticmethod
-    def default_login_try():
-        return 0
+        # Migration from 2.6
+        table.drop_column('login_try', exception=True)
 
-    @staticmethod
-    def default_password():
-        return None
+        # Migration from 3.0
+        if table.column_exist('password') and table.column_exist('salt'):
+            sqltable = cls.__table__()
+            password_hash_new = Concat('sha1$', Concat(sqltable.password,
+                Concat('$', Coalesce(sqltable.salt, ''))))
+            cursor.execute(*sqltable.update(
+                columns=[sqltable.password_hash],
+                values=[password_hash_new]))
+            table.drop_column('password', exception=True)
+            table.drop_column('salt', exception=True)
 
     @staticmethod
     def default_active():
@@ -175,6 +179,20 @@ class User(ModelSQL, ModelView):
     def get_status_bar(self, name):
         return self.name
 
+    def get_password(self, name):
+        return 'x' * 10
+
+    @classmethod
+    def set_password(cls, users, name, value):
+        if value == 'x' * 10:
+            return
+        to_write = []
+        for user in users:
+            to_write.extend([[user], {
+                        'password_hash': cls.hash_password(value),
+                        }])
+        cls.write(*to_write)
+
     @staticmethod
     def get_sessions(users, name):
         Session = Pool().get('ir.session')
@@ -205,27 +223,31 @@ class User(ModelSQL, ModelView):
         Action = pool.get('ir.action')
         if 'menu' in vals:
             vals['menu'] = Action.get_action_id(vals['menu'])
-        if 'password' in vals:
-            if vals['password'] == 'x' * 10:
-                del vals['password']
-            elif vals['password']:
-                vals['salt'] = ''.join(random.sample(
-                    string.ascii_letters + string.digits, 8))
-                vals['password'] += vals['salt']
         return vals
 
     @classmethod
-    def create(cls, vals):
-        vals = cls._convert_vals(vals)
-        res = super(User, cls).create(vals)
+    def create(cls, vlist):
+        vlist = [cls._convert_vals(vals) for vals in vlist]
+        res = super(User, cls).create(vlist)
         # Restart the cache for _get_login
         cls._get_login_cache.clear()
         return res
 
     @classmethod
-    def write(cls, users, vals):
-        vals = cls._convert_vals(vals)
-        super(User, cls).write(users, vals)
+    def write(cls, users, values, *args):
+        actions = iter((users, values) + args)
+        all_users = []
+        args = []
+        for users, values in zip(actions, actions):
+            all_users += users
+            args.extend((users, cls._convert_vals(values)))
+        super(User, cls).write(*args)
+        # Clean cursor cache as it could be filled by domain_get
+        for cache in Transaction().cursor.cache.itervalues():
+            if cls.__name__ in cache:
+                for user in all_users:
+                    if user.id in cache[cls.__name__]:
+                        cache[cls.__name__][user.id].clear()
         # Restart the cache for domain_get method
         pool = Pool()
         pool.get('ir.rule')._domain_get_cache.clear()
@@ -237,6 +259,8 @@ class User(ModelSQL, ModelView):
         cls._get_preferences_cache.clear()
         # Restart the cache of check
         pool.get('ir.model.access')._get_access_cache.clear()
+        # Restart the cache of check
+        pool.get('ir.model.field.access')._get_access_cache.clear()
         # Restart the cache
         ModelView._fields_view_get_cache.clear()
 
@@ -247,14 +271,6 @@ class User(ModelSQL, ModelView):
         super(User, cls).delete(users)
         # Restart the cache for _get_login
         cls._get_login_cache.clear()
-
-    @classmethod
-    def read(cls, ids, fields_names=None):
-        res = super(User, cls).read(ids, fields_names=fields_names)
-        for val in res:
-            if 'password' in val:
-                val['password'] = 'x' * 10
-        return res
 
     @classmethod
     def search_rec_name(cls, name, clause):
@@ -286,6 +302,7 @@ class User(ModelSQL, ModelView):
         ModelData = pool.get('ir.model.data')
         Action = pool.get('ir.action')
         ConfigItem = pool.get('ir.module.module.config_wizard.item')
+        Config = pool.get('ir.configuration')
 
         res = {}
         if context_only:
@@ -298,7 +315,7 @@ class User(ModelSQL, ModelView):
                     if user.language:
                         res['language'] = user.language.code
                     else:
-                        res['language'] = CONFIG['language']
+                        res['language'] = Config.get_language()
                 else:
                     res[field] = None
                     if getattr(user, field):
@@ -340,7 +357,7 @@ class User(ModelSQL, ModelView):
         if preferences is not None:
             return preferences.copy()
         user = Transaction().user
-        with Transaction().set_user(0):
+        with Transaction().set_user(0, set_context=True):
             user = cls(user)
         preferences = cls._get_preferences(user, context_only=context_only)
         cls._get_preferences_cache.set(key, preferences)
@@ -400,10 +417,7 @@ class User(ModelSQL, ModelView):
 
         if 'language' in res['fields']:
             selection = convert2selection(res['fields'], 'language')
-            langs = Lang.search(['OR',
-                    ('translatable', '=', True),
-                    ('code', '=', CONFIG['language']),
-                    ])
+            langs = Lang.search(cls.language.domain)
             lang_ids = [l.id for l in langs]
             with Transaction().set_context(translate_name=True):
                 for lang in Lang.browse(lang_ids):
@@ -442,10 +456,10 @@ class User(ModelSQL, ModelView):
         if result:
             return result
         cursor = Transaction().cursor
-        cursor.execute('SELECT id, password, salt ' \
-                'FROM "' + cls._table + '" '
-                'WHERE login = %s AND active', (login,))
-        result = cursor.fetchone() or (None, None, None)
+        table = cls.__table__()
+        cursor.execute(*table.select(table.id, table.password_hash,
+                where=(table.login == login) & table.active))
+        result = cursor.fetchone() or (None, None)
         cls._get_login_cache.set(login, result)
         return result
 
@@ -454,30 +468,116 @@ class User(ModelSQL, ModelView):
         '''
         Return user id if password matches
         '''
-        user_id, user_password, salt = cls._get_login(login)
-        if not user_id:
-            return 0
-        password += salt or ''
+        LoginAttempt = Pool().get('res.user.login.attempt')
+        time.sleep(2 ** LoginAttempt.count(login) - 1)
+        user_id, password_hash = cls._get_login(login)
+        if user_id:
+            if cls.check_password(password, password_hash):
+                LoginAttempt.remove(login)
+                return user_id
+        LoginAttempt.add(login)
+        return 0
+
+    @staticmethod
+    def hash_method():
+        return 'bcrypt' if bcrypt else 'sha1'
+
+    @classmethod
+    def hash_password(cls, password):
+        '''Hash given password in the form
+        <hash_method>$<password>$<salt>...'''
+        if not password:
+            return ''
+        return getattr(cls, 'hash_' + cls.hash_method())(password)
+
+    @classmethod
+    def check_password(cls, password, hash_):
+        if not hash_:
+            return False
+        hash_method = hash_.split('$', 1)[0]
+        return getattr(cls, 'check_' + hash_method)(password, hash_)
+
+    @classmethod
+    def hash_sha1(cls, password):
         if isinstance(password, unicode):
             password = password.encode('utf-8')
-        if hashlib:
-            password_sha = hashlib.sha1(password).hexdigest()
-        else:
-            password_sha = sha.new(password).hexdigest()
+        salt = ''.join(random.sample(string.ascii_letters + string.digits, 8))
+        hash_ = hashlib.sha1(password + salt).hexdigest()
+        return '$'.join(['sha1', hash_, salt])
+
+    @classmethod
+    def check_sha1(cls, password, hash_):
+        if isinstance(password, unicode):
+            password = password.encode('utf-8')
+        if isinstance(hash_, unicode):
+            hash_ = hash_.encode('utf-8')
+        hash_method, hash_, salt = hash_.split('$', 2)
+        salt = salt or ''
+        assert hash_method == 'sha1'
+        return hash_ == hashlib.sha1(password + salt).hexdigest()
+
+    @classmethod
+    def hash_bcrypt(cls, password):
+        if isinstance(password, unicode):
+            password = password.encode('utf-8')
+        hash_ = bcrypt.hashpw(password, bcrypt.gensalt())
+        return '$'.join(['bcrypt', hash_])
+
+    @classmethod
+    def check_bcrypt(cls, password, hash_):
+        if isinstance(password, unicode):
+            password = password.encode('utf-8')
+        if isinstance(hash_, unicode):
+            hash_ = hash_.encode('utf-8')
+        hash_method, hash_ = hash_.split('$', 1)
+        assert hash_method == 'bcrypt'
+        return hash_ == bcrypt.hashpw(password, hash_)
+
+
+class LoginAttempt(ModelSQL):
+    """Login Attempt
+
+    This class is separated from the res.user one in order to prevent locking
+    the res.user table when in a long running process.
+    """
+    __name__ = 'res.user.login.attempt'
+    login = fields.Char('Login')
+
+    @classmethod
+    def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
+        super(LoginAttempt, cls).__register__(module_name)
+        table = TableHandler(Transaction().cursor, cls, module_name)
+
+        # Migration from 2.8: remove user
+        table.drop_column('user')
+
+    @staticmethod
+    def delay():
+        return (datetime.datetime.now()
+            - datetime.timedelta(seconds=int(CONFIG['session_timeout'])))
+
+    @classmethod
+    def add(cls, login):
+        cls.delete(cls.search([
+                    ('create_date', '<', cls.delay()),
+                    ]))
+        cls.create([{'login': login}])
+
+    @classmethod
+    def remove(cls, login):
         cursor = Transaction().cursor
-        if password_sha == user_password:
-            cursor.execute('UPDATE "' + cls._table + '" '
-                'SET login_try = 0 '
-                'WHERE login = %s', (login,))
-            return user_id
-        cursor.execute('UPDATE "' + cls._table + '" '
-            'SET login_try = login_try + 1 '
-            'WHERE login = %s', (login,))
-        cursor.execute('SELECT login_try FROM "' + cls._table + '" '
-            'WHERE login = %s', (login,))
-        login_try, = cursor.fetchone()
-        time.sleep(2 ** login_try)
-        return 0
+        table = cls.__table__()
+        cursor.execute(*table.delete(where=table.login == login))
+
+    @classmethod
+    def count(cls, login):
+        cursor = Transaction().cursor
+        table = cls.__table__()
+        cursor.execute(*table.select(Count(Literal(1)),
+                where=(table.login == login)
+                & (table.create_date >= cls.delay())))
+        return cursor.fetchone()[0]
 
 
 class UserAction(ModelSQL):
@@ -498,14 +598,17 @@ class UserAction(ModelSQL):
         return values
 
     @classmethod
-    def create(cls, values):
-        values = cls._convert_values(values)
-        return super(UserAction, cls).create(values)
+    def create(cls, vlist):
+        vlist = [cls._convert_values(values) for values in vlist]
+        return super(UserAction, cls).create(vlist)
 
     @classmethod
-    def write(cls, records, values):
-        values = cls._convert_values(values)
-        super(UserAction, cls).write(records, values)
+    def write(cls, records, values, *args):
+        actions = iter((records, values) + args)
+        args = []
+        for records, values in zip(actions, actions):
+            args.extend((records, cls._convert_values(values)))
+        super(UserAction, cls).write(*args)
 
 
 class UserGroup(ModelSQL):
@@ -518,11 +621,12 @@ class UserGroup(ModelSQL):
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         # Migration from 1.0 table name change
         TableHandler.table_rename(cursor, 'res_group_user_rel', cls._table)
         TableHandler.sequence_rename(cursor, 'res_group_user_rel_id_seq',
-                cls._table + '_id_seq')
+            cls._table + '_id_seq')
         # Migration from 2.0 uid and gid rename into user and group
         table = TableHandler(cursor, cls, module_name)
         table.column_rename('uid', 'user')

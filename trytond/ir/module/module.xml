@@ -18,7 +18,7 @@ this repository contains the full copyright notices and license terms. -->
             <field name="name">Modules</field>
             <field name="type">ir.action.act_window</field>
             <field name="res_model">ir.module.module</field>
-            <field name="domain">[('name', '!=', 'test')]</field>
+            <field name="domain">[('name', '!=', 'tests')]</field>
         </record>
         <record model="ir.action.act_window.view"
             id="act_module_form_view1">
@@ -87,6 +87,12 @@ this repository contains the full copyright notices and license terms. -->
             <field name="model">ir.module.module.config_wizard.other</field>
             <field name="type">form</field>
             <field name="name">module_config_wizard_other_form</field>
+        </record>
+
+        <record model="ir.ui.view" id="module_config_wizard_done_view_form">
+            <field name="model">ir.module.module.config_wizard.done</field>
+            <field name="type">form</field>
+            <field name="name">module_config_wizard_done_form</field>
         </record>
 
         <record model="ir.action.wizard" id="act_module_install_upgrade">

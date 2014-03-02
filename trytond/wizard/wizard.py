@@ -9,7 +9,7 @@ except ImportError:
     import json
 import copy
 
-from trytond.pool import Pool, PoolMeta
+from trytond.pool import Pool, PoolBase
 from trytond.transaction import Transaction
 from trytond.error import WarningErrorMixin
 from trytond.url import URLMixin
@@ -142,13 +142,13 @@ class StateAction(StateTransition):
         return Action.get_action_values(action.type, [action.id])[0]
 
 
-class Wizard(WarningErrorMixin, URLMixin):
-    __metaclass__ = PoolMeta
+class Wizard(WarningErrorMixin, URLMixin, PoolBase):
     start_state = 'start'
     end_state = 'end'
 
     @classmethod
     def __setup__(cls):
+        super(Wizard, cls).__setup__()
         cls.__rpc__ = {
             'create': RPC(readonly=False),
             'delete': RPC(readonly=False),
@@ -163,82 +163,48 @@ class Wizard(WarningErrorMixin, URLMixin):
 
     @classmethod
     def __post_setup__(cls):
+        super(Wizard, cls).__post_setup__()
         # Set states
         cls.states = {}
         for attr in dir(cls):
+            if attr.startswith('_'):
+                continue
             if isinstance(getattr(cls, attr), State):
                 cls.states[attr] = getattr(cls, attr)
 
     @classmethod
     def __register__(cls, module_name):
+        super(Wizard, cls).__register__(module_name)
         pool = Pool()
         Translation = pool.get('ir.translation')
-        cursor = Transaction().cursor
-        for state_name, state in cls.states.iteritems():
-            if isinstance(state, StateView):
-                for button in state.buttons:
-                    cursor.execute('SELECT id, name, src '
-                        'FROM ir_translation '
-                        'WHERE module = %s '
-                            'AND lang = %s '
-                            'AND type = %s '
-                            'AND name = %s',
-                        (module_name, 'en_US', 'wizard_button',
-                            cls.__name__ + ',' + state_name + ',' +
-                            button.state))
-                    res = cursor.dictfetchall()
-                    src_md5 = Translation.get_src_md5(button.string)
-                    if not res:
-                        cursor.execute('INSERT INTO ir_translation '
-                            '(name, lang, type, src, src_md5, value, module, '
-                                'fuzzy) '
-                            'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                            (cls.__name__ + ',' + state_name + ',' +
-                                button.state,
-                                'en_US', 'wizard_button', button.string,
-                                src_md5, '', module_name, False))
-                    elif res[0]['src'] != button.string:
-                        cursor.execute('UPDATE ir_translation '
-                            'SET src = %s, src_md5 = %s '
-                            'WHERE id = %s',
-                            (button.string, src_md5, res[0]['id']))
-
-        cursor.execute('SELECT id, src FROM ir_translation '
-            'WHERE lang = %s '
-                'AND type = %s '
-                'AND name = %s',
-            ('en_US', 'error', cls.__name__))
-        trans_error = {}
-        for trans in cursor.dictfetchall():
-            trans_error[trans['src']] = trans
-
-        for error in cls._error_messages.values():
-            if error not in trans_error:
-                error_md5 = Translation.get_src_md5(error)
-                cursor.execute('INSERT INTO ir_translation '
-                    '(name, lang, type, src, src_md5,  value, module, fuzzy) '
-                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                    (cls.__name__, 'en_US', 'error', error, error_md5, '',
-                        module_name, False))
+        Translation.register_wizard(cls, module_name)
+        Translation.register_error_messages(cls, module_name)
 
     @classmethod
     def create(cls):
         "Create a session"
         Session = Pool().get('ir.session.wizard')
-        return (Session.create({}).id, cls.start_state, cls.end_state)
+        return (Session.create([{}])[0].id, cls.start_state, cls.end_state)
 
     @classmethod
     def delete(cls, session_id):
         "Delete the session"
         Session = Pool().get('ir.session.wizard')
+        end = getattr(cls, cls.end_state, None)
+        if end:
+            wizard = cls(session_id)
+            action = end(wizard)
+        else:
+            action = None
         Session.delete([Session(session_id)])
+        return action
 
     @classmethod
-    def execute(cls, session, data, state_name):
+    def execute(cls, session_id, data, state_name):
         '''
         Execute the wizard state.
 
-        session is a Session or a Session id
+        session_id is a Session id
         data is a dictionary with the session data to update
         state_name is the name of state to execute
 
@@ -249,7 +215,7 @@ class Wizard(WarningErrorMixin, URLMixin):
                 - ``defaults``: a dictionary with default values
                 - ``buttons``: a list of buttons
         '''
-        wizard = cls(session)
+        wizard = cls(session_id)
         for key, values in data.iteritems():
             record = getattr(wizard, key)
             for field, value in values.iteritems():

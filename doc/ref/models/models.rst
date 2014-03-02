@@ -17,17 +17,6 @@ Class attributes are:
     It contains the a unique name to reference the model throughout the
     platform.
 
-.. attribute:: Model._inherits
-
-    It contains a dictionary with one or more :attr:`Model._name` as keys. For each
-    key a :class:`~trytond.model.fields.Many2One` field is defined as value. The
-    :class:`trytond.model.fields.Many2One` fields must be defined in the the current
-    model fields. A referenced model with ``_inherits`` is a generalization_ of the
-    current model which is *specialized*. In the specialized model it is possible to
-    interact with all attributes and methods of the general model.
-
-    .. _generalization: http://en.wikipedia.org/wiki/Class_diagram#Generalization
-
 .. attribute:: Model.__rpc__
 
     It contains a dictionary with method name as key and an instance of
@@ -87,12 +76,13 @@ Class methods:
         warning states by users.
     ..
 
-.. classmethod:: Model.default_get(fields_names[, with_rec_name])
+.. classmethod:: Model.default_get(fields_names[, with_rec_name[, with_on_change]])
 
     Return a dictionary with the default values for each field in
     ``fields_names``. Default values are defined by the returned value of each
     instance method with the pattern ``default_`field_name`()``.
     ``with_rec_name`` allow to add `rec_name` value for each many2one field.
+    ``with_on_change`` allow to add ``on_change`` value for each default value.
 
 .. classmethod:: Model.fields_get([fields_names])
 
@@ -128,7 +118,7 @@ Static methods:
 
 .. staticmethod:: ModelView.button_action(action)
 
-    Same as :stat:`ModelView.button` but return the action id of the XML `id`
+    Same as :meth:`ModelView.button` but return the action id of the XML `id`
     action.
 
 Class methods:
@@ -211,6 +201,9 @@ Class attributes are:
 
 .. attribute:: ModelStorage._constraints
 
+    .. warning::
+        Deprecated, use :class:`trytond.model.ModelStorage.validate` instead.
+
     The list of constraints that each record must respect. The definition is:
 
         [ ('function name', 'error keyword'), ... ]
@@ -231,12 +224,12 @@ Static methods:
 
 CLass methods:
 
-.. classmethod:: ModelStorage.create(values)
+.. classmethod:: ModelStorage.create(vlist)
 
-    Create a record. ``values`` is a dictionary with fields names as key and
-    created values as value and return the new instance.
+    Create records. ``vlist`` is list of dictionaries with fields names as key
+    and created values as value and return the list of new instances.
 
-.. classmethod:: ModelStorage.trigger_create(record)
+.. classmethod:: ModelStorage.trigger_create(records)
 
     Trigger create actions. It will call actions defined in ``ir.trigger`` if
     ``on_create`` is set and ``condition`` is true.
@@ -246,7 +239,7 @@ CLass methods:
     Return a list of values for the ids. If ``fields_names`` is set, there will
     be only values for these fields otherwise it will be for all fields.
 
-.. classmethod:: ModelStorage.write(records, values)
+.. classmethod:: ModelStorage.write(records, values, [[records, values], ...])
 
     Write ``values`` on the list of records.  ``values`` is a dictionary with
     fields names as key and writen values as value.
@@ -294,6 +287,11 @@ CLass methods:
     Searcher for the :class:`trytond.model.fields.Function` field
     :attr:`rec_name`.
 
+.. classmethod:: ModelStorage.search_global(cls, text)
+
+    Yield tuples (id, rec_name, icon) for records matching text.
+    It is used for the global search.
+
 .. classmethod:: ModelStorage.browse(ids)
 
     Return a list of record instance for the ``ids``.
@@ -321,6 +319,12 @@ CLass methods:
 
     Helper method that checks if there is no recursion in the tree composed
     with ``parent`` as parent field name.
+
+.. classmethod:: ModelStorage.validate(records)
+
+    Validate the integrity of records after creation and modification. This
+    method must be overridden to add validation and must raise an exception if
+    validation fails.
 
 Instance methods:
 
@@ -388,10 +392,19 @@ Class attributes are:
 
 Class methods:
 
+.. classmethod:: ModelSQL.__table__()
+
+    Return a SQL Table instance for the Model.
+
 .. classmethod:: ModelSQL.table_query()
 
     Could be overrided to use a custom SQL query instead of a table of the
-    database. It should return a tuple containing SQL query and arguments.
+    database. It should return a SQL FromItem.
+
+.. classmethod:: ModelStorage.search(domain[, offset[, limit[, order[, count[, query]]]]])
+
+    Return a list of records that match the :ref:`domain <topics-domain>` or
+    the sql query if query is True.
 
 .. classmethod:: ModelSQL.search_domain(domain[, active_test])
 
@@ -447,3 +460,74 @@ Class methods:
 .. classmethod:: ModelSingleton.get_singleton()
 
     Return the instance of the unique record if there is one.
+
+===============
+DictSchemaMixin
+===============
+
+.. class:: DictSchemaMixin
+
+A mixin_ for the schema of :class:`trytond.model.fields.Dict` field.
+
+Class attributes are:
+
+.. attribute:: DictSchemaMixin.name
+
+    The definition of the :class:`trytond.model.fields.Char` field for the name
+    of the key.
+
+.. attribute:: DictSchemaMixin.string
+
+    The definition of the :class:`trytond.model.fields.Char` field for the
+    string of the key.
+
+.. attribute:: DictSchemaMixin.type\_
+
+    The definition of the :class:`trytond.model.fields.Selection` field for the
+    type of the key. The available types are:
+
+    * boolean
+    * integer
+    * char
+    * float
+    * numeric
+    * date
+    * datetime
+    * selection
+
+.. attribute:: DictSchemaMixin.digits
+
+    The definition of the :class:`trytond.model.fields.Integer` field for the
+    digits number when the type is `float` or `numeric`.
+
+.. attribute:: DictSchemaMixin.selection
+
+    The definition of the :class:`trytond.model.fields.Text` field to store the
+    couple of key and label when the type is `selection`.
+    The format is a key/label separated by ":" per line.
+
+.. attribute:: DictSchemaMixin.selection_json
+
+    The definition of the :class:`trytond.model.fields.Function` field to
+    return the JSON_ version of the :attr:`selection`.
+
+Static methods:
+
+.. staticmethod:: DictSchemaMixin.default_digits()
+
+    Return the default value for :attr:`digits`.
+
+Class methods:
+
+.. classmethod:: DictSchemaMixin.get_keys(records)
+
+    Return the definition of the keys for the records.
+
+Instance methods:
+
+.. method:: DictSchemaMixin.get_selection_json(name)
+
+    Getter for the :attr:`selection_json`.
+
+.. _mixin: http://en.wikipedia.org/wiki/Mixin
+.. _JSON: http://en.wikipedia.org/wiki/Json

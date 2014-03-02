@@ -1,22 +1,22 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 import os
+import sys
 import logging
 from lxml import etree
-from difflib import SequenceMatcher
 from trytond.model import ModelView, ModelSQL, fields
-from trytond.backend import TableHandler
-from trytond.pyson import CONTEXT, Eval, Bool
+from trytond import backend
+from trytond.pyson import CONTEXT, Eval, Bool, PYSONDecoder
 from trytond.tools import safe_eval, file_open
 from trytond.transaction import Transaction
-from trytond.wizard import Wizard, StateView, StateAction, Button
+from trytond.wizard import Wizard, StateView, Button
 from trytond.pool import Pool
 from trytond.cache import Cache
 from trytond.rpc import RPC
 
 __all__ = [
-    'View', 'ShowViewStart', 'ShowView', 'ViewShortcut',
-    'OpenShortcut', 'ViewTreeWidth', 'ViewTreeExpandedState',
+    'View', 'ShowViewStart', 'ShowView',
+    'ViewTreeWidth', 'ViewTreeState', 'ViewSearch',
     ]
 
 
@@ -33,6 +33,7 @@ class View(ModelSQL, ModelView):
             ('tree', 'Tree'),
             ('form', 'Form'),
             ('graph', 'Graph'),
+            ('calendar', 'Calendar'),
             ('board', 'Board'),
             ], 'View Type', select=True)
     data = fields.Text('Data')
@@ -58,19 +59,19 @@ class View(ModelSQL, ModelView):
     @classmethod
     def __setup__(cls):
         super(View, cls).__setup__()
-        cls._constraints += [
-            ('check_xml', 'invalid_xml'),
-        ]
         cls._error_messages.update({
-            'invalid_xml': 'Invalid XML for View!',
-        })
+                'invalid_xml': 'Invalid XML for view "%s".',
+                })
         cls._order.insert(0, ('priority', 'ASC'))
         cls._buttons.update({
-                'show': {},
+                'show': {
+                    'readonly': Eval('type') != 'form',
+                    },
                 })
 
     @classmethod
     def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
         table = TableHandler(cursor, cls, module_name)
 
@@ -104,27 +105,22 @@ class View(ModelSQL, ModelView):
         key = (cls.__name__, type_)
         rng = cls._get_rng_cache.get(key)
         if rng is None:
-            rng_name = os.path.join(os.path.dirname(__file__), type_ + '.rng')
+            rng_name = os.path.join(os.path.dirname(
+                    unicode(__file__, sys.getfilesystemencoding())),
+                type_ + '.rng')
             rng = etree.fromstring(open(rng_name).read())
             cls._get_rng_cache.set(key, rng)
         return rng
 
     @classmethod
+    def validate(cls, views):
+        super(View, cls).validate(views)
+        cls.check_xml(views)
+
+    @classmethod
     def check_xml(cls, views):
         "Check XML"
-        pool = Pool()
-        Translation = pool.get('ir.translation')
-        cursor = Transaction().cursor
         for view in views:
-            cursor.execute('SELECT id, name, src FROM ir_translation ' \
-                    'WHERE lang = %s ' \
-                        'AND type = %s ' \
-                        'AND name = %s '\
-                        'AND module = %s',
-                            ('en_US', 'view', view.model, view.module))
-            trans_views = {}
-            for trans in cursor.dictfetchall():
-                trans_views[trans['src']] = trans
             if not view.arch:
                 continue
             xml = view.arch.strip()
@@ -141,7 +137,7 @@ class View(ModelSQL, ModelView):
                             validator.error_log.filter_from_errors())
                     logger.error('Invalid xml view:\n%s'
                         % (str(error_log) + '\n' + xml))
-                    return False
+                    cls.raise_user_error('invalid_xml', (view.rec_name,))
             root_element = tree.getroottree().getroot()
 
             # validate pyson attributes
@@ -167,66 +163,7 @@ class View(ModelSQL, ModelView):
                         return False
                 return True
             if not encode(root_element):
-                return False
-
-            strings = cls._translate_view(root_element)
-            with Transaction().set_user(0):
-                views2 = cls.search([
-                    ('model', '=', view.model),
-                    ('id', '!=', view.id),
-                    ('module', '=', view.module),
-                    ])
-                for view2 in views2:
-                    xml2 = view2.arch.strip()
-                    if not xml2:
-                        continue
-                    tree2 = etree.fromstring(xml2)
-                    root2_element = tree2.getroottree().getroot()
-                    strings += cls._translate_view(root2_element)
-            if not strings:
-                continue
-            for string in set(strings):
-                done = False
-                if string in trans_views:
-                    del trans_views[string]
-                    continue
-                string_md5 = Translation.get_src_md5(string)
-                for string_trans in trans_views:
-                    if string_trans in strings:
-                        continue
-                    seqmatch = SequenceMatcher(lambda x: x == ' ',
-                            string, string_trans)
-                    if seqmatch.ratio() == 1.0:
-                        del trans_views[string_trans]
-                        done = True
-                        break
-                    if seqmatch.ratio() > 0.6:
-                        cursor.execute('UPDATE ir_translation '
-                            'SET src = %s, '
-                                'src_md5 = %s, '
-                                'fuzzy = %s '
-                            'WHERE id = %s ',
-                            (string, string_md5, True,
-                                trans_views[string_trans]['id']))
-                        del trans_views[string_trans]
-                        done = True
-                        break
-                if not done:
-                    cursor.execute('INSERT INTO ir_translation '
-                        '(name, lang, type, src, src_md5, value, module, '
-                            'fuzzy) '
-                        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                        (view.model, 'en_US', 'view', string, string_md5, '',
-                            view.module, False))
-            if strings:
-                cursor.execute('DELETE FROM ir_translation ' \
-                        'WHERE name = %s ' \
-                            'AND type = %s ' \
-                            'AND module = %s ' \
-                            'AND src NOT IN ' \
-                                '(' + ','.join(('%s',) * len(strings)) + ')',
-                        (view.model, 'view', view.module) + tuple(strings))
-        return True
+                cls.raise_user_error('invalid_xml', (view.rec_name,))
 
     def get_arch(self, name):
         value = None
@@ -252,29 +189,17 @@ class View(ModelSQL, ModelView):
         ModelView._fields_view_get_cache.clear()
 
     @classmethod
-    def create(cls, vals):
-        view = super(View, cls).create(vals)
+    def create(cls, vlist):
+        views = super(View, cls).create(vlist)
         # Restart the cache
         ModelView._fields_view_get_cache.clear()
-        return view
+        return views
 
     @classmethod
-    def write(cls, views, vals):
-        super(View, cls).write(views, vals)
+    def write(cls, views, values, *args):
+        super(View, cls).write(views, values, *args)
         # Restart the cache
         ModelView._fields_view_get_cache.clear()
-
-    @classmethod
-    def _translate_view(cls, element):
-        strings = []
-        for attr in ('string', 'sum', 'confirm', 'help'):
-            if element.get(attr):
-                string = element.get(attr)
-                if string:
-                    strings.append(string)
-        for child in element:
-            strings.extend(cls._translate_view(child))
-        return strings
 
 
 class ShowViewStart(ModelView):
@@ -296,8 +221,6 @@ class ShowView(Wizard):
             View = pool.get('ir.ui.view')
             view = View(Transaction().context.get('active_id'))
             Model = pool.get(view.model)
-            if view.type != 'form':
-                return Model.fields_view_get(view_type='form')
             return Model.fields_view_get(view_id=view.id)
 
         def get_defaults(self, wizard, state_name, fields):
@@ -306,102 +229,6 @@ class ShowView(Wizard):
     start = ShowStateView('ir.ui.view.show.start', [
             Button('Close', 'end', 'tryton-close', default=True),
             ])
-
-
-class ViewShortcut(ModelSQL, ModelView):
-    "View shortcut"
-    __name__ = 'ir.ui.view_sc'
-
-    name = fields.Char('Shortcut Name', required=True)
-    res_id = fields.Integer('Resource Ref.', required=True)
-    sequence = fields.Integer('Sequence',
-        order_field='(%(table)s.sequence IS NULL) %(order)s, '
-        '%(table)s.sequence %(order)s')
-    user_id = fields.Many2One('res.user', 'User Ref.', required=True,
-       ondelete='CASCADE')
-    resource = fields.Char('Resource Name', required=True)
-
-    @classmethod
-    def __setup__(cls):
-        super(ViewShortcut, cls).__setup__()
-        cls.__rpc__.update({
-                'get_sc': RPC(),
-                })
-        cls._order.insert(0, ('sequence', 'ASC'))
-
-    @classmethod
-    def __register__(cls, module_name):
-        cursor = Transaction().cursor
-        super(ViewShortcut, cls).__register__(module_name)
-        table = TableHandler(cursor, cls, module_name)
-
-        # Migration from 2.4 sequence is not required anymore
-        table.not_null_action('sequence', action='remove')
-
-    @classmethod
-    def get_sc(cls, user_id, model='ir.ui.menu'):
-        "Provide user's shortcuts"
-        result = []
-        shortcuts = cls.search([
-                ('user_id', '=', user_id),
-                ('resource', '=', model),
-                ])
-        for shorcut in shortcuts:
-            result.append({
-                    'res_id': shorcut.res_id,
-                    'name': shorcut.name,
-                    })
-        return result
-
-    @staticmethod
-    def default_resource():
-        return 'ir.ui.menu'
-
-
-class OpenShortcut(Wizard):
-    'Open a shortcut'
-    __name__ = 'ir.ui.view_sc.open'
-
-    start_state = 'open_'
-
-    class OpenStateAction(StateAction):
-        def __init__(self):
-            StateAction.__init__(self, None)
-
-        def get_action(self):
-            pass
-
-    open_ = OpenStateAction()
-
-    @staticmethod
-    def transition_open_():
-        return 'end'
-
-    @staticmethod
-    def do_open_(action):
-        pool = Pool()
-        ViewSC = pool.get('ir.ui.view_sc')
-        ActionKeyword = pool.get('ir.action.keyword')
-        Action = pool.get('ir.action')
-
-        view_sc = ViewSC(Transaction().context.get('active_id'))
-        models = (
-                '%s,%d' % (view_sc.resource, view_sc.res_id),
-                '%s,0' % (view_sc.resource),
-                )
-        action_keywords = None
-        for model in models:
-            action_keywords = ActionKeyword.search([
-                    ('keyword', '=', 'tree_open'),
-                    ('model', '=', model),
-                    ])
-            if action_keywords:
-                break
-        if not action_keywords:
-            return {}, {}
-        action_keyword = action_keywords[0]
-        return Action.get_action_values(action_keyword.action.type,
-            [action_keyword.action.id])[0], {}
 
 
 class ViewTreeWidth(ModelSQL, ModelView):
@@ -427,14 +254,14 @@ class ViewTreeWidth(ModelSQL, ModelView):
         super(ViewTreeWidth, cls).delete(records)
 
     @classmethod
-    def create(cls, vals):
-        res = super(ViewTreeWidth, cls).create(vals)
+    def create(cls, vlist):
+        res = super(ViewTreeWidth, cls).create(vlist)
         ModelView._fields_view_get_cache.clear()
         return res
 
     @classmethod
-    def write(cls, records, vals):
-        super(ViewTreeWidth, cls).write(records, vals)
+    def write(cls, records, values, *args):
+        super(ViewTreeWidth, cls).write(records, values, *args)
         ModelView._fields_view_get_cache.clear()
 
     @classmethod
@@ -450,18 +277,21 @@ class ViewTreeWidth(ModelSQL, ModelView):
             ])
         cls.delete(records)
 
+        to_create = []
         for field in fields.keys():
-            cls.create({
-                'model': model,
-                'field': field,
-                'user': Transaction().user,
-                'width': fields[field],
-                })
+            to_create.append({
+                    'model': model,
+                    'field': field,
+                    'user': Transaction().user,
+                    'width': fields[field],
+                    })
+        if to_create:
+            cls.create(to_create)
 
 
-class ViewTreeExpandedState(ModelSQL, ModelView):
-    'View Tree Expanded State'
-    __name__ = 'ir.ui.view_tree_expanded_state'
+class ViewTreeState(ModelSQL, ModelView):
+    'View Tree State'
+    __name__ = 'ir.ui.view_tree_state'
     _rec_name = 'model'
     model = fields.Char('Model', required=True)
     domain = fields.Char('Domain', required=True)
@@ -469,20 +299,28 @@ class ViewTreeExpandedState(ModelSQL, ModelView):
             ondelete='CASCADE')
     child_name = fields.Char('Child Name')
     nodes = fields.Text('Expanded Nodes')
+    selected_nodes = fields.Text('Selected Nodes')
 
     @classmethod
     def __setup__(cls):
-        super(ViewTreeExpandedState, cls).__setup__()
+        super(ViewTreeState, cls).__setup__()
         cls.__rpc__.update({
-                'set_expanded': RPC(readonly=False),
-                'get_expanded': RPC(),
+                'set': RPC(readonly=False),
+                'get': RPC(),
                 })
 
     @classmethod
     def __register__(cls, module_name):
-        super(ViewTreeExpandedState, cls).__register__(module_name)
-
+        TableHandler = backend.get('TableHandler')
         cursor = Transaction().cursor
+        table = TableHandler(cursor, cls, module_name)
+
+        # Migration from 2.8: table name changed
+        table.table_rename(cursor, 'ir_ui_view_tree_expanded_state',
+            cls._table)
+
+        super(ViewTreeState, cls).__register__(module_name)
+
         table = TableHandler(cursor, cls, module_name)
         table.index_action(['model', 'domain', 'user', 'child_name'], 'add')
 
@@ -490,8 +328,12 @@ class ViewTreeExpandedState(ModelSQL, ModelView):
     def default_nodes():
         return '[]'
 
+    @staticmethod
+    def default_selected_nodes():
+        return '[]'
+
     @classmethod
-    def set_expanded(cls, model, domain, child_name, nodes):
+    def set(cls, model, domain, child_name, nodes, selected_nodes):
         current_user = Transaction().user
         with Transaction().set_user(0):
             records = cls.search([
@@ -501,16 +343,17 @@ class ViewTreeExpandedState(ModelSQL, ModelView):
                     ('child_name', '=', child_name),
                     ])
             cls.delete(records)
-            cls.create({
-                    'user': current_user,
-                    'model': model,
-                    'domain': domain,
-                    'child_name': child_name,
-                    'nodes': nodes,
-                    })
+            cls.create([{
+                        'user': current_user,
+                        'model': model,
+                        'domain': domain,
+                        'child_name': child_name,
+                        'nodes': nodes,
+                        'selected_nodes': selected_nodes,
+                        }])
 
     @classmethod
-    def get_expanded(cls, model, domain, child_name):
+    def get(cls, model, domain, child_name):
         current_user = Transaction().user
         with Transaction().set_user(0):
             try:
@@ -522,5 +365,43 @@ class ViewTreeExpandedState(ModelSQL, ModelView):
                         ],
                     limit=1)
             except ValueError:
-                return '[]'
-            return cls(expanded_info).nodes
+                return (cls.default_nodes(), cls.default_selected_nodes())
+            state = cls(expanded_info)
+            return (state.nodes or cls.default_nodes(),
+                state.selected_nodes or cls.default_selected_nodes())
+
+
+class ViewSearch(ModelSQL, ModelView):
+    "View Search"
+    __name__ = 'ir.ui.view_search'
+
+    name = fields.Char('Name', required=True)
+    model = fields.Char('Model', required=True)
+    domain = fields.Char('Domain', help="The PYSON domain")
+    user = fields.Many2One('res.user', 'User', required=True,
+        ondelete='CASCADE')
+
+    @classmethod
+    def __setup__(cls):
+        super(ViewSearch, cls).__setup__()
+        cls.__rpc__.update({
+                'get_search': RPC(),
+                })
+
+    @staticmethod
+    def default_user():
+        return Transaction().user
+
+    @classmethod
+    def get_search(cls, user_id=None):
+        if user_id is None:
+            user_id = Transaction().user
+        decoder = PYSONDecoder()
+        searches = cls.search([
+                ('user', '=', user_id),
+                ], order=[('model', 'ASC'), ('name', 'ASC')])
+        result = {}
+        for search in searches:
+            result.setdefault(search.model, []).append(
+                (search.id, search.name, decoder.decode(search.domain)))
+        return result
