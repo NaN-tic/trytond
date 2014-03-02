@@ -1,6 +1,5 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import sys
 try:
     import simplejson as json
 except ImportError:
@@ -23,7 +22,7 @@ class PYSON(object):
         raise NotImplementedError
 
     def __invert__(self):
-        if self.types()!= set([bool]):
+        if self.types() != set([bool]):
             return Not(Bool(self))
         else:
             return Not(self)
@@ -186,10 +185,10 @@ class And(PYSON):
         for statement in statements:
             if isinstance(statement, PYSON):
                 assert statement.types() == set([bool]), \
-                        'statement must be boolean'
+                    'statement must be boolean'
             else:
                 assert isinstance(statement, bool), \
-                        'statement must be boolean'
+                    'statement must be boolean'
         assert len(statements) >= 2, 'must have at least 2 statements'
         self._statements = list(statements)
 
@@ -257,10 +256,10 @@ class Greater(PYSON):
         for i in (statement1, statement2):
             if isinstance(i, PYSON):
                 assert i.types().issubset(set([int, long, float])), \
-                        'statement must be an integer or a float'
+                    'statement must be an integer or a float'
             else:
                 assert isinstance(i, (int, long, float)), \
-                        'statement must be an integer or a float'
+                    'statement must be an integer or a float'
         if isinstance(equal, PYSON):
             assert equal.types() == set([bool])
         else:
@@ -281,7 +280,16 @@ class Greater(PYSON):
         return set([bool])
 
     @staticmethod
+    def _convert(dct):
+        for i in ('s1', 's2'):
+            if not isinstance(dct[i], (int, long, float)):
+                dct = dct.copy()
+                dct[i] = float(dct[i])
+        return dct
+
+    @staticmethod
     def eval(dct, context):
+        dct = Greater._convert(dct)
         if dct['e']:
             return dct['s1'] >= dct['s2']
         else:
@@ -297,6 +305,7 @@ class Less(Greater):
 
     @staticmethod
     def eval(dct, context):
+        dct = Less._convert(dct)
         if dct['e']:
             return dct['s1'] <= dct['s2']
         else:
@@ -308,7 +317,8 @@ class If(PYSON):
     def __init__(self, condition, then_statement, else_statement=None):
         super(If, self).__init__()
         if isinstance(condition, PYSON):
-            assert condition.types() == set([bool]), 'condition must be boolean'
+            assert condition.types() == set([bool]), \
+                'condition must be boolean'
         else:
             assert isinstance(condition, bool), 'condition must be boolean'
         if isinstance(then_statement, PYSON):
@@ -317,10 +327,10 @@ class If(PYSON):
             then_types = set([type(then_statement)])
         if isinstance(else_statement, PYSON):
             assert then_types == else_statement.types(), \
-                    'then and else statements must be the same type'
+                'then and else statements must be the same type'
         else:
             assert then_types == set([type(else_statement)]), \
-                    'then and else statements must be the same type'
+                'then and else statements must be the same type'
         self._condition = condition
         self._then_statement = then_statement
         self._else_statement = else_statement
@@ -388,13 +398,13 @@ class In(PYSON):
         super(In, self).__init__()
         if isinstance(key, PYSON):
             assert key.types().issubset(set([str, int, long])), \
-                    'key must be a string or an integer or a long'
+                'key must be a string or an integer or a long'
         else:
             assert type(key) in [str, int, long], \
-                    'key must be a string or an integer or a long'
+                'key must be a string or an integer or a long'
         if isinstance(obj, PYSON):
             assert obj.types().issubset(set([dict, list])), \
-                    'obj must be a dict or a list'
+                'obj must be a dict or a list'
             if obj.types() == set([dict]):
                 assert type(key) == str, 'key must be a string'
         else:
@@ -427,10 +437,10 @@ class Date(PYSON):
         for i in (year, month, day, delta_years, delta_months, delta_days):
             if isinstance(i, PYSON):
                 assert i.types().issubset(set([int, long, type(None)])), \
-                        '%s must be an integer or None' % (i,)
+                    '%s must be an integer or None' % (i,)
             else:
                 assert isinstance(i, (int, long, type(None))), \
-                        '%s must be an integer or None' % (i,)
+                    '%s must be an integer or None' % (i,)
         self._year = year
         self._month = month
         self._day = day
@@ -478,10 +488,10 @@ class DateTime(Date):
                 delta_hours, delta_minutes, delta_seconds, delta_microseconds):
             if isinstance(i, PYSON):
                 assert i.types() == set([int, long, type(None)]), \
-                        '%s must be an integer or None' % (i,)
+                    '%s must be an integer or None' % (i,)
             else:
                 assert isinstance(i, (int, long, type(None))), \
-                        '%s must be an integer or None' % (i,)
+                    '%s must be an integer or None' % (i,)
         self._hour = hour
         self._minute = minute
         self._second = second
@@ -526,6 +536,49 @@ class DateTime(Date):
             microseconds=dct['dms'],
             )
 
+
+class Len(PYSON):
+
+    def __init__(self, value):
+        super(Len, self).__init__()
+        if isinstance(value, PYSON):
+            assert value.types().issubset(set([dict, list, str])), \
+                'value must be a dict or a list or a string'
+        else:
+            assert type(value) in [dict, list, str], \
+                'value must be a dict or list or a string'
+        self._value = value
+
+    def pyson(self):
+        return {
+            '__class__': 'Len',
+            'v': self._value,
+            }
+
+    def types(self):
+        return set([int, long])
+
+    @staticmethod
+    def eval(dct, context):
+        return len(dct['v'])
+
+
+class Id(PYSON):
+    """The database id for filesystem id"""
+
+    def __init__(self, module, fs_id):
+        super(Id, self).__init__()
+        self._module = module
+        self._fs_id = fs_id
+
+    def pyson(self):
+        from trytond.pool import Pool
+        ModelData = Pool().get('ir.model.data')
+        return ModelData.get_id(self._module, self._fs_id)
+
+    def types(self):
+        return set([int])
+
 CONTEXT = {
     'Eval': Eval,
     'Not': Not,
@@ -540,4 +593,5 @@ CONTEXT = {
     'In': In,
     'Date': Date,
     'DateTime': DateTime,
+    'Len': Len,
 }

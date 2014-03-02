@@ -2,7 +2,6 @@
 #this repository contains the full copyright notices and license terms.
 from trytond.backend.database import DatabaseInterface, CursorInterface
 from trytond.config import CONFIG
-from trytond.session import Session
 from psycopg2.pool import ThreadedConnectionPool
 from psycopg2.extensions import cursor as PsycopgCursor
 from psycopg2.extensions import ISOLATION_LEVEL_REPEATABLE_READ
@@ -22,11 +21,14 @@ import os
 if os.name == 'posix':
     import pwd
 from decimal import Decimal
-from trytond.protocols.datatype import Float
+from sql import Flavor
 
-RE_FROM = re.compile('.* from "?([a-zA-Z_0-9]+)"?.*$')
-RE_INTO = re.compile('.* into "?([a-zA-Z_0-9]+)"?.*$')
+__all__ = ['Database', 'DatabaseIntegrityError', 'DatabaseOperationalError',
+    'Cursor']
+
 RE_VERSION = re.compile(r'\S+ (\d+)\.(\d+)')
+
+os.environ['PGTZ'] = os.environ.get('TZ', '')
 
 
 class Database(DatabaseInterface):
@@ -36,6 +38,7 @@ class Database(DatabaseInterface):
     _list_cache = None
     _list_cache_timestamp = None
     _version_cache = {}
+    flavor = Flavor(ilike=True)
 
     def __new__(cls, database_name='template1'):
         if database_name in cls._databases:
@@ -55,8 +58,8 @@ class Database(DatabaseInterface):
         port = CONFIG['db_port'] and "port=%s" % CONFIG['db_port'] or ''
         name = "dbname=%s" % self.database_name
         user = CONFIG['db_user'] and "user=%s" % CONFIG['db_user'] or ''
-        password = CONFIG['db_password'] \
-                and "password=%s" % CONFIG['db_password'] or ''
+        password = (CONFIG['db_password']
+            and "password=%s" % CONFIG['db_password'] or '')
         minconn = int(CONFIG['db_minconn']) or 1
         maxconn = int(CONFIG['db_maxconn']) or 64
         dsn = '%s %s %s %s %s' % (host, port, name, user, password)
@@ -72,7 +75,6 @@ class Database(DatabaseInterface):
         else:
             conn.set_isolation_level(ISOLATION_LEVEL_REPEATABLE_READ)
         cursor = Cursor(self._connpool, conn, self)
-        # TODO change for set_session
         if readonly:
             cursor.execute('SET TRANSACTION READ ONLY')
         return cursor
@@ -83,14 +85,16 @@ class Database(DatabaseInterface):
         self._connpool.closeall()
         self._connpool = None
 
-    def create(self, cursor, database_name):
-        cursor.execute('CREATE DATABASE "' + database_name + '" ' \
-                'TEMPLATE template0 ENCODING \'unicode\'')
-        Database._list_cache = None
+    @classmethod
+    def create(cls, cursor, database_name):
+        cursor.execute('CREATE DATABASE "' + database_name + '" '
+            'TEMPLATE template0 ENCODING \'unicode\'')
+        cls._list_cache = None
 
-    def drop(self, cursor, database_name):
+    @classmethod
+    def drop(cls, cursor, database_name):
         cursor.execute('DROP DATABASE "' + database_name + '"')
-        Database._list_cache = None
+        cls._list_cache = None
 
     def get_version(self, cursor):
         if self.database_name not in self._version_cache:
@@ -179,32 +183,32 @@ class Database(DatabaseInterface):
         if not db_user and os.name == 'posix':
             db_user = pwd.getpwuid(os.getuid())[0]
         if not db_user:
-            cursor.execute("SELECT usename " \
-                    "FROM pg_user " \
-                    "WHERE usesysid = (" \
-                        "SELECT datdba " \
-                        "FROM pg_database " \
-                        "WHERE datname = %s)",
-                        (CONFIG["db_name"],))
+            cursor.execute("SELECT usename "
+                "FROM pg_user "
+                "WHERE usesysid = ("
+                    "SELECT datdba "
+                    "FROM pg_database "
+                    "WHERE datname = %s)",
+                (CONFIG["db_name"],))
             res = cursor.fetchone()
             db_user = res and res[0]
         if db_user:
-            cursor.execute("SELECT datname " \
-                    "FROM pg_database " \
-                    "WHERE datdba = (" \
-                        "SELECT usesysid " \
-                        "FROM pg_user " \
-                        "WHERE usename=%s) " \
-                        "AND datname not in " \
-                            "('template0', 'template1', 'postgres') " \
-                    "ORDER BY datname",
-                            (db_user,))
+            cursor.execute("SELECT datname "
+                "FROM pg_database "
+                "WHERE datdba = ("
+                    "SELECT usesysid "
+                    "FROM pg_user "
+                    "WHERE usename=%s) "
+                    "AND datname not in "
+                        "('template0', 'template1', 'postgres') "
+                "ORDER BY datname",
+                (db_user,))
         else:
-            cursor.execute("SELECT datname " \
-                    "FROM pg_database " \
-                    "WHERE datname not in " \
-                        "('template0', 'template1','postgres') " \
-                    "ORDER BY datname")
+            cursor.execute("SELECT datname "
+                "FROM pg_database "
+                "WHERE datname not in "
+                    "('template0', 'template1','postgres') "
+                "ORDER BY datname")
         res = []
         for db_name, in cursor.fetchall():
             db_name = db_name.encode('utf-8')
@@ -225,39 +229,29 @@ class Database(DatabaseInterface):
 
     @staticmethod
     def init(cursor):
-        from trytond.tools import safe_eval
+        from trytond.modules import get_module_info
         sql_file = os.path.join(os.path.dirname(__file__), 'init.sql')
         with open(sql_file) as fp:
             for line in fp.read().split(';'):
-                if (len(line)>0) and (not line.isspace()):
+                if (len(line) > 0) and (not line.isspace()):
                     cursor.execute(line)
 
-        for i in ('ir', 'workflow', 'res', 'webdav'):
-            root_path = os.path.join(os.path.dirname(__file__), '..', '..')
-            tryton_file = os.path.join(root_path, i, '__tryton__.py')
-            mod_path = os.path.join(root_path, i)
-            with open(tryton_file) as fp:
-                info = safe_eval(fp.read())
-            active = info.get('active', False)
-            if active:
+        for module in ('ir', 'res', 'webdav'):
+            state = 'uninstalled'
+            if module in ('ir', 'res'):
                 state = 'to install'
-            else:
-                state = 'uninstalled'
+            info = get_module_info(module)
             cursor.execute('SELECT NEXTVAL(\'ir_module_module_id_seq\')')
             module_id = cursor.fetchone()[0]
-            cursor.execute('INSERT INTO ir_module_module ' \
-                    '(id, create_uid, create_date, author, website, name, ' \
-                    'shortdesc, description, state) ' \
-                    'VALUES (%s, %s, now(), %s, %s, %s, %s, %s, %s)',
-                    (module_id, 0, info.get('author', ''),
-                info.get('website', ''), i, info.get('name', False),
-                info.get('description', ''), state))
-            dependencies = info.get('depends', [])
-            for dependency in dependencies:
-                cursor.execute('INSERT INTO ir_module_module_dependency ' \
-                        '(create_uid, create_date, module, name) ' \
-                        'VALUES (%s, now(), %s, %s)',
-                        (0, module_id, dependency))
+            cursor.execute('INSERT INTO ir_module_module '
+                '(id, create_uid, create_date, name, state) '
+                'VALUES (%s, %s, now(), %s, %s)',
+                (module_id, 0, module, state))
+            for dependency in info.get('depends', []):
+                cursor.execute('INSERT INTO ir_module_module_dependency '
+                    '(create_uid, create_date, module, name) '
+                    'VALUES (%s, now(), %s, %s)',
+                    (0, module_id, dependency))
 
 
 class _Cursor(PsycopgCursor):
@@ -311,60 +305,13 @@ class Cursor(CursorInterface):
         return getattr(self.cursor, name)
 
     def execute(self, sql, params=None):
-        if self.sql_log:
-            now = time.time()
-
-        try:
-            if params:
-                res = self.cursor.execute(sql, params)
-            else:
-                res = self.cursor.execute(sql)
-        except Exception:
-            logger = logging.getLogger('sql')
-            logger.error('Wrong SQL: ' + (self.cursor.query or ''))
-            raise
-        if self.sql_log:
-            res_from = RE_FROM.match(sql.lower())
-            if res_from:
-                self.sql_from_log.setdefault(res_from.group(1), [0, 0])
-                self.sql_from_log[res_from.group(1)][0] += 1
-                self.sql_from_log[res_from.group(1)][1] += time.time() - now
-                self.count['from'] += 1
-            res_into = RE_INTO.match(sql.lower())
-            if res_into:
-                self.sql_into_log.setdefault(res_into.group(1), [0, 0])
-                self.sql_into_log[res_into.group(1)][0] += 1
-                self.sql_into_log[res_into.group(1)][1] += time.time() - now
-                self.count['into'] += 1
-        return res
-
-    def _print_log(self, sql_type='from'):
-        logger = logging.getLogger('sql')
-        logger.info("SQL LOG %s:" % (sql_type,))
-        if sql_type == 'from':
-            logs = self.sql_from_log.items()
+        if params:
+            return self.cursor.execute(sql, params)
         else:
-            logs = self.sql_into_log.items()
-        logs.sort(lambda x, y: cmp(x[1][1], y[1][1]))
-        amount = 0
-        for log in logs:
-            logger.info("table:%s:%f/%d" % (log[0], log[1][1], log[1][0]))
-            amount += log[1][1]
-        logger.info("SUM:%s/%d" % (amount, self.count[sql_type]))
+            return self.cursor.execute(sql)
 
     def close(self, close=False):
-        if self.sql_log:
-            self._print_log('from')
-            self._print_log('into')
         self.cursor.close()
-
-        # This force the cursor to be freed, and thus, available again. It is
-        # important because otherwise we can overload the server very easily
-        # because of a cursor shortage (because cursors are not garbage
-        # collected as fast as they should). The problem is probably due in
-        # part because browse records keep a reference to the cursor.
-        del self.cursor
-        #if id(self._conn) in self._connpool._rused:
         self.rollback()
         self._connpool.putconn(self._conn, close=close)
 
@@ -377,21 +324,15 @@ class Cursor(CursorInterface):
         self._conn.rollback()
 
     def test(self):
-        self.cursor.execute("SELECT relname " \
-                "FROM pg_class " \
-                "WHERE relkind = 'r' AND relname in (" \
+        self.cursor.execute("SELECT relname "
+            "FROM pg_class "
+            "WHERE relkind = 'r' AND relname in ("
                 "'ir_model', "
                 "'ir_model_field', "
                 "'ir_ui_view', "
                 "'ir_ui_menu', "
                 "'res_user', "
                 "'res_group', "
-                "'wkf', "
-                "'wkf_activity', "
-                "'wkf_transition', "
-                "'wkf_instance', "
-                "'wkf_workitem', "
-                "'wkf_witm_trans', "
                 "'ir_module_module', "
                 "'ir_module_module_dependency', "
                 "'ir_translation', "
@@ -404,14 +345,15 @@ class Cursor(CursorInterface):
         return self.cursor.fetchone()[0]
 
     def setnextid(self, table, value):
-        self.cursor.execute("SELECT SETVAL('" + table + "_id_seq', %d)" % value)
+        self.cursor.execute("SELECT SETVAL('" + table + "_id_seq', %d)"
+            % value)
 
     def currid(self, table):
         self.cursor.execute('SELECT last_value FROM "' + table + '_id_seq"')
         return self.cursor.fetchone()[0]
 
     def lock(self, table):
-        self.cursor.execute('LOCK "%s"' % table)
+        self.cursor.execute('LOCK "%s" IN EXCLUSIVE MODE' % table)
 
     def has_constraint(self):
         return True
@@ -434,7 +376,5 @@ if PYDATETIME:
     register_type(PYDATETIME)
 if PYTIME:
     register_type(PYTIME)
-register_adapter(Session, AsIs)
 register_adapter(float, lambda value: AsIs(repr(value)))
-register_adapter(Float, lambda value: AsIs(repr(value)))
 register_adapter(Decimal, lambda value: AsIs(str(value)))

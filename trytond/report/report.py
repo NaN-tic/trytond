@@ -1,8 +1,5 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import copy
-import xml
-import sys
 try:
     import cStringIO as StringIO
 except ImportError:
@@ -25,9 +22,10 @@ except ImportError:
 from genshi.filters import Translator
 import lxml.etree
 from trytond.config import CONFIG
-from trytond.pool import Pool
+from trytond.pool import Pool, PoolBase
 from trytond.transaction import Transaction
 from trytond.url import URLMixin
+from trytond.rpc import RPC
 
 MIMETYPES = {
     'odt': 'application/vnd.oasis.opendocument.text',
@@ -58,9 +56,10 @@ FORMAT2EXT = {
 
 class ReportFactory:
 
-    def __call__(self, objects, **kwargs):
+    def __call__(self, records, **kwargs):
         data = {}
-        data['objects'] = objects
+        data['objects'] = records  # XXX To remove
+        data['records'] = records
         data.update(kwargs)
         return data
 
@@ -76,16 +75,16 @@ class TranslateFactory:
     def __call__(self, text):
         if self.language not in self.cache:
             self.cache[self.language] = {}
-            translation_ids = self.translation.search([
+            translations = self.translation.search([
                 ('lang', '=', self.language),
                 ('type', '=', 'odt'),
                 ('name', '=', self.report_name),
                 ('value', '!=', ''),
-                ('value', '!=', False),
+                ('value', '!=', None),
                 ('fuzzy', '=', False),
-                ('res_id', '=', 0),
+                ('res_id', '=', -1),
                 ])
-            for translation in self.translation.browse(translation_ids):
+            for translation in translations:
                 self.cache[self.language][translation.src] = translation.value
         return self.cache[self.language].get(text, text)
 
@@ -93,80 +92,92 @@ class TranslateFactory:
         self.language = language
 
 
-class Report(URLMixin):
-    _name = ""
+class Report(URLMixin, PoolBase):
 
-    def __new__(cls):
-        Pool.register(cls, type='report')
+    @classmethod
+    def __setup__(cls):
+        super(Report, cls).__setup__()
+        cls.__rpc__ = {
+            'execute': RPC(),
+            }
 
-    def __init__(self):
-        self._rpc = {
-            'execute': False,
-        }
-
-    def init(self, module_name):
-        pass
-
-    def execute(self, ids, datas):
+    @classmethod
+    def execute(cls, ids, data):
         '''
-        Execute the report.
-
-        :param ids: a list of record ids on which execute report
-        :param datas: a dictionary with datas that will be set in
-            local context of the report
-        :return: a tuple with:
+        Execute the report on record ids.
+        The dictionary with data that will be set in local context of the
+        report.
+        It returns a tuple with:
             report type,
             data,
             a boolean to direct print,
             the report name
         '''
         pool = Pool()
-        action_report_obj = pool.get('ir.action.report')
-        action_report_ids = action_report_obj.search([
-            ('report_name', '=', self._name)
-            ])
-        if not action_report_ids:
-            raise Exception('Error', 'Report (%s) not find!' % self._name)
-        action_report = action_report_obj.browse(action_report_ids[0])
-        objects = None
-        if action_report.model:
-            objects = self._get_objects(ids, action_report.model, datas)
-        type, data = self.parse(action_report, objects, datas, {})
+        ActionReport = pool.get('ir.action.report')
+        action_reports = ActionReport.search([
+                ('report_name', '=', cls.__name__)
+                ])
+        if not action_reports:
+            raise Exception('Error', 'Report (%s) not find!' % cls.__name__)
+        action_report = action_reports[0]
+        records = None
+        model = action_report.model or data.get('model')
+        if model:
+            records = cls._get_records(ids, model, data)
+        type, data = cls.parse(action_report, records, data, {})
         return (type, buffer(data), action_report.direct_print,
-                action_report.name)
+            action_report.name)
 
-    def _get_objects(self, ids, model, datas):
+    @classmethod
+    def _get_records(cls, ids, model, data):
         pool = Pool()
-        model_obj = pool.get(model)
-        return model_obj.browse(ids)
+        Model = pool.get(model)
 
-    def parse(self, report, objects, datas, localcontext):
+        class TranslateModel:
+            _languages = {}
+
+            def __init__(self, id):
+                self.id = id
+                self._language = Transaction().language
+
+            def setLang(self, language):
+                self._language = language
+
+            def __getattr__(self, name):
+                if self._language not in TranslateModel._languages:
+                    with Transaction().set_context(language=self._language):
+                        records = Model.browse(ids)
+                    id2record = dict((r.id, r) for r in records)
+                    TranslateModel._languages[self._language] = id2record
+                else:
+                    id2record = TranslateModel._languages[self._language]
+                record = id2record[self.id]
+                return getattr(record, name)
+        return [TranslateModel(id) for id in ids]
+
+    @classmethod
+    def parse(cls, report, records, data, localcontext):
         '''
-        Parse the report.
-
-        :param report: a BrowseRecord of the ir.action.report
-        :param objects: a BrowseRecordList of the records on which parse report
-        :param datas: a dictionary with datas that will be set in local context
-            of the report
-        :param localcontext: the context used to parse the report
-        :return: a tuple with:
-            report type
-            report
+        Parse the report and return a tuple with report type and report.
         '''
         pool = Pool()
-        localcontext['datas'] = datas
-        localcontext['user'] = pool.get('res.user'
-                ).browse(Transaction().user)
+        User = pool.get('res.user')
+        Translation = pool.get('ir.translation')
+
+        localcontext['data'] = data
+        localcontext['user'] = User(Transaction().user)
         localcontext['formatLang'] = lambda *args, **kargs: \
-                self.format_lang(*args, **kargs)
+            cls.format_lang(*args, **kargs)
         localcontext['StringIO'] = StringIO.StringIO
         localcontext['time'] = time
         localcontext['datetime'] = datetime
         localcontext['context'] = Transaction().context
 
-        translate = TranslateFactory(self._name, Transaction().language,
-                pool.get('ir.translation'))
-        localcontext['setLang'] = lambda language: translate.set_language(language)
+        translate = TranslateFactory(cls.__name__, Transaction().language,
+            Translation)
+        localcontext['setLang'] = lambda language: translate.set_language(
+            language)
 
         # Convert to str as buffer from DB is not supported by StringIO
         report_content = (str(report.report_content) if report.report_content
@@ -202,8 +213,9 @@ class Report(URLMixin):
         if style_content:
             pictures = []
 
-            #cStringIO difference:
-            #calling StringIO() with a string parameter creates a read-only object
+            # cStringIO difference:
+            # calling StringIO() with a string parameter creates a read-only
+            # object
             new_style_io = StringIO.StringIO()
             new_style_io.write(style_content)
             new_style_z = zipfile.ZipFile(new_style_io, mode='r')
@@ -258,9 +270,10 @@ class Report(URLMixin):
             localcontext.iteritems()))
         #Test compatibility with old relatorio version <= 0.3.0
         if len(inspect.getargspec(rel_report.__call__)[0]) == 2:
-            data = rel_report(objects, **localcontext).render().getvalue()
+            data = rel_report(records, **localcontext).render().getvalue()
         else:
-            localcontext['objects'] = objects
+            localcontext['objects'] = records  # XXX to remove
+            localcontext['records'] = records
             data = rel_report(**localcontext).render()
             if hasattr(data, 'getvalue'):
                 data = data.getvalue()
@@ -268,11 +281,12 @@ class Report(URLMixin):
         os.remove(path)
         output_format = report.extension or report.template_extension
         if output_format not in MIMETYPES:
-            data = self.unoconv(data, report.template_extension, output_format)
+            data = cls.unoconv(data, report.template_extension, output_format)
         oext = FORMAT2EXT.get(output_format, output_format)
         return (oext, data)
 
-    def unoconv(self, data, input_format, output_format):
+    @classmethod
+    def unoconv(cls, data, input_format, output_format):
         '''
         Call unoconv to convert the OpenDocument
         '''
@@ -292,36 +306,27 @@ class Report(URLMixin):
         finally:
             os.remove(path)
 
-    def format_lang(self, value, lang, digits=2, grouping=True, monetary=False,
+    @classmethod
+    def format_lang(cls, value, lang, digits=2, grouping=True, monetary=False,
             date=False, currency=None, symbol=True):
         pool = Pool()
-        lang_obj = pool.get('ir.lang')
+        Lang = pool.get('ir.lang')
+        Config = pool.get('ir.configuration')
 
-        if date:
+        if date or isinstance(value, datetime.date):
+            if date:
+                warnings.warn('date parameter of format_lang is deprecated, '
+                    'use a datetime.date as value instead', DeprecationWarning,
+                    stacklevel=2)
             if lang:
                 locale_format = lang.date
                 code = lang.code
             else:
-                locale_format = lang_obj.default_date()
-                code = lang_obj.default_code()
-            if not isinstance(value, time.struct_time):
-                # assume string, parse it
-                if len(str(value)) == 10:
-                    # length of date like 2001-01-01 is ten
-                    # assume format '%Y-%m-%d'
-                    string_pattern = '%Y-%m-%d'
-                else:
-                    # assume format '%Y-%m-%d %H:%M:%S'
-                    value = str(value)[:19]
-                    locale_format = locale_format + ' %H:%M:%S'
-                    string_pattern = '%Y-%m-%d %H:%M:%S'
-                date = datetime.datetime(*time.strptime(str(value),
-                    string_pattern)[:6])
-            else:
-                date = datetime.datetime(*(value.timetuple()[:6]))
-            return lang_obj.strftime(date, code, locale_format)
+                locale_format = Lang.default_date()
+                code = Config.get_language()
+            return Lang.strftime(value, code, locale_format)
         if currency:
-            return lang_obj.currency(lang, value, currency, grouping=grouping,
-                    symbol=symbol)
-        return lang_obj.format(lang, '%.' + str(digits) + 'f', value,
-                grouping=grouping, monetary=monetary)
+            return Lang.currency(lang, value, currency, grouping=grouping,
+                symbol=symbol)
+        return Lang.format(lang, '%.' + str(digits) + 'f', value,
+            grouping=grouping, monetary=monetary)

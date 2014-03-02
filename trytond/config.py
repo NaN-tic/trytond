@@ -1,6 +1,19 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import ConfigParser, os, sys
+import sys
+try:
+    import cdecimal
+    # Use cdecimal globally
+    if 'decimal' not in sys.modules:
+        sys.modules['decimal'] = cdecimal
+except ImportError:
+    import decimal
+    sys.modules['cdecimal'] = decimal
+import os
+import ConfigParser
+import getpass
+import socket
+
 
 def get_hostname(netloc):
     if '[' in netloc and ']' in netloc:
@@ -9,6 +22,7 @@ def get_hostname(netloc):
         return netloc.split(':')[0]
     else:
         return netloc
+
 
 def get_port(netloc, protocol):
     netloc = netloc.split(']')[-1]
@@ -21,17 +35,19 @@ def get_port(netloc, protocol):
             'webdav': 8080,
         }.get(protocol)
 
+
 class ConfigManager(object):
     def __init__(self, fname=None):
         self.options = {
-            'hostname': None,
             'jsonrpc': [('localhost', 8000)],
             'ssl_jsonrpc': False,
+            'hostname_jsonrpc': None,
             'xmlrpc': [],
             'ssl_xmlrpc': False,
             'jsondata_path': '/var/www/localhost/tryton',
             'webdav': [],
             'ssl_webdav': False,
+            'hostname_webdav': None,
             'db_type': 'postgresql',
             'db_host': False,
             'db_port': False,
@@ -54,10 +70,11 @@ class ConfigManager(object):
             'smtp_tls': False,
             'smtp_user': False,
             'smtp_password': False,
+            'smtp_default_from_email': '%s@%s' % (
+                getpass.getuser(), socket.getfqdn()),
             'data_path': '/var/lib/trytond',
             'multi_server': False,
             'session_timeout': 600,
-            'psyco': False,
             'auto_reload': True,
             'prevent_dblist': False,
             'init': {},
@@ -65,13 +82,15 @@ class ConfigManager(object):
             'cron': True,
             'unoconv': 'pipe,name=trytond;urp;StarOffice.ComponentContext',
             'retry': 5,
+            'language': 'en_US',
         }
         self.configfile = None
 
     def update_cmdline(self, cmdline_options):
         self.options.update(cmdline_options)
 
-        # Verify that we want to log or not, if not the output will go to stdout
+        # Verify that we want to log or not,
+        # if not the output will go to stdout
         if self.options['logfile'] in ('None', 'False'):
             self.options['logfile'] = False
         # the same for the pidfile
@@ -82,15 +101,17 @@ class ConfigManager(object):
 
     def update_etc(self, configfile=None):
         if configfile is None:
-            prefixdir = os.path.abspath(os.path.normpath(os.path.join(
-                os.path.dirname(sys.prefix), '..')))
-            configfile = os.path.join(prefixdir, 'etc', 'trytond.conf')
-            if not os.path.isfile(configfile):
-                configdir = os.path.abspath(os.path.normpath(os.path.join(
-                    os.path.dirname(__file__), '..')))
-                configfile = os.path.join(configdir, 'etc', 'trytond.conf')
-            if not os.path.isfile(configfile):
-                configfile = None
+            configfile = os.environ.get('TRYTOND_CONFIG')
+            if not configfile:
+                prefixdir = os.path.abspath(os.path.normpath(os.path.join(
+                    os.path.dirname(sys.prefix), '..')))
+                configfile = os.path.join(prefixdir, 'etc', 'trytond.conf')
+                if not os.path.isfile(configfile):
+                    configdir = os.path.abspath(os.path.normpath(os.path.join(
+                        os.path.dirname(__file__), '..')))
+                    configfile = os.path.join(configdir, 'etc', 'trytond.conf')
+                if not os.path.isfile(configfile):
+                    configfile = None
 
         self.configfile = configfile
         if not self.configfile:

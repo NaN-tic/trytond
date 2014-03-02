@@ -1,11 +1,22 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
+from collections import namedtuple
+import warnings
+from functools import wraps
+
+from sql import operators, Column, Literal, Select, CombiningQuery
+from sql.conditionals import Coalesce, NullIf
+from sql.operators import Concat
 
 from trytond.pyson import PYSON
 from trytond.const import OPERATORS
+from trytond.transaction import Transaction
+from trytond.pool import Pool
+
 
 def domain_validate(value):
     assert isinstance(value, list), 'domain must be a list'
+
     def test_domain(dom):
         for arg in dom:
             if isinstance(arg, basestring):
@@ -24,39 +35,82 @@ def domain_validate(value):
         return True
     assert test_domain(value), 'invalid domain'
 
+
 def states_validate(value):
     assert isinstance(value, dict), 'states must be a dict'
     for state in value:
         if state == 'icon':
             continue
         assert isinstance(value[state], (bool, PYSON)), \
-                'values of states must be PYSON'
+            'values of states must be PYSON'
         if hasattr(value[state], 'types'):
             assert value[state].types() == set([bool]), \
-                    'values of states must return boolean'
+                'values of states must return boolean'
 
-def on_change_validate(value):
-    if value:
-        assert isinstance(value, list), 'on_change must be a list'
-
-def on_change_with_validate(value):
-    if value:
-        assert isinstance(value, list), 'on_change_with must be a list'
 
 def depends_validate(value):
     assert isinstance(value, list), 'depends must be a list'
 
+
 def context_validate(value):
     assert isinstance(value, dict), 'context must be a dict'
+
+
+def size_validate(value):
+    if value is not None:
+        assert isinstance(value, (int, PYSON)), 'size must be PYSON'
+        if hasattr(value, 'types'):
+            assert value.types() == set([int]), \
+                'size must return integer'
+
+
+def depends(*fields, **kwargs):
+    methods = kwargs.pop('methods', None)
+    assert not kwargs
+
+    def decorator(func):
+        depends = getattr(func, 'depends', set())
+        depends |= set(fields)
+        setattr(func, 'depends', depends)
+
+        if methods:
+            depend_methods = getattr(func, 'depend_methods', set())
+            depend_methods |= set(methods)
+            setattr(func, 'depend_methods', depend_methods)
+
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            for field in fields:
+                if not hasattr(self, field):
+                    setattr(self, field, None)
+            return func(self, *args, **kwargs)
+        return wrapper
+    return decorator
+
+
+SQL_OPERATORS = {
+    '=': operators.Equal,
+    '!=': operators.NotEqual,
+    'like': operators.Like,
+    'not like': operators.NotLike,
+    'ilike': operators.ILike,
+    'not ilike': operators.NotILike,
+    'in': operators.In,
+    'not in': operators.NotIn,
+    '<=': operators.LessEqual,
+    '>=': operators.GreaterEqual,
+    '<': operators.Less,
+    '>': operators.Greater,
+    }
 
 
 class Field(object):
     _type = None
 
     def __init__(self, string='', help='', required=False, readonly=False,
-            domain=None, states=None, change_default=False, select=False,
-            on_change=None, on_change_with=None, depends=None,
-            order_field=None, context=None, loading='eager'):
+            domain=None, states=None, select=False, on_change=None,
+            on_change_with=None, depends=None, context=None,
+            loading='eager'):
         '''
         :param string: A string for label of the field.
         :param help: A multi-line help string.
@@ -68,19 +122,15 @@ class Field(object):
             ``readonly`` and ``invisible``. Values are pyson expressions that
             will be evaluated with record values. This allows to change
             dynamically the attributes of the field.
-        :param change_default: A boolean. If ``True`` the field can be used as
-        condition for a custom default value.
         :param select: An boolean. When True search will be optimized.
         :param on_change: A list of values. If set, the client will call the
             method ``on_change_<field_name>`` when the user changes the field
             value. It then passes this list of values as arguments to the
             function.
-        :param on_change_with: A list of values. Like ``on_change``, but defined
-            the other way around. The list contains all the fields that must
-            update the current field.
+        :param on_change_with: A list of values. Like ``on_change``, but
+            defined the other way around. The list contains all the fields that
+            must update the current field.
         :param depends: A list of field name on which this one depends.
-        :param order_field: A string. If set it will use the string when
-            ordering records on the field.
         :param context: A dictionary which will be given to open the relation
             fields.
         :param loading: Define how the field must be loaded:
@@ -95,19 +145,27 @@ class Field(object):
         self.domain = domain or []
         self.__states = None
         self.states = states or {}
-        self.change_default = change_default
         self.select = bool(select)
-        self.__on_change = None
-        self.on_change = on_change
-        self.__on_change_with = None
-        self.on_change_with = on_change_with
+        self.on_change = set()
+        if on_change:
+            warnings.warn('on_change argument is deprecated, '
+                'use the depends decorator',
+                DeprecationWarning, stacklevel=3)
+            self.on_change |= set(on_change)
+        self.on_change_with = set()
+        if on_change_with:
+            warnings.warn('on_change_with argument is deprecated, '
+                'use the depends decorator',
+                DeprecationWarning, stacklevel=3)
+            self.on_change_with |= set(on_change_with)
         self.__depends = None
         self.depends = depends or []
-        self.order_field = order_field
         self.__context = None
         self.context = context or {}
-        assert loading in ('lazy', 'eager'), 'loading must be "lazy" or "eager"'
+        assert loading in ('lazy', 'eager'), \
+            'loading must be "lazy" or "eager"'
         self.loading = loading
+        self.name = None
 
     def _get_domain(self):
         return self.__domain
@@ -127,23 +185,6 @@ class Field(object):
 
     states = property(_get_states, _set_states)
 
-    def _get_on_change(self):
-        return self.__on_change
-
-    def _set_on_change(self, value):
-        on_change_validate(value)
-        self.__on_change = value
-    on_change = property(_get_on_change, _set_on_change)
-
-    def _get_on_change_with(self):
-        return self.__on_change_with
-
-    def _set_on_change_with(self, value):
-        on_change_with_validate(value)
-        self.__on_change_with = value
-
-    on_change_with = property(_get_on_change_with, _set_on_change_with)
-
     def _get_depends(self):
         return self.__depends
 
@@ -161,3 +202,148 @@ class Field(object):
         self.__context = value
 
     context = property(_get_context, _set_context)
+
+    def __get__(self, inst, cls):
+        if inst is None:
+            return self
+        assert self.name is not None
+        return inst.__getattr__(self.name)
+
+    def __set__(self, inst, value):
+        assert self.name is not None
+        if inst._values is None:
+            inst._values = {}
+        inst._values[self.name] = value
+
+    @staticmethod
+    def sql_format(value):
+        return value
+
+    def sql_type(self):
+        raise NotImplementedError
+
+    def _domain_value(self, operator, value):
+        if isinstance(value, (Select, CombiningQuery)):
+            return value
+        if operator in ('in', 'not in'):
+            return [self.sql_format(v) for v in value if v is not None]
+        else:
+            return self.sql_format(value)
+
+    def _domain_add_null(self, column, operator, value, expression):
+        if operator in ('in', 'not in'):
+            if (not isinstance(value, (Select, CombiningQuery))
+                    and any(v is None for v in value)):
+                if operator == 'in':
+                    expression |= (column == None)
+                else:
+                    expression &= (column != None)
+        return expression
+
+    def convert_domain(self, domain, tables, Model):
+        "Return a SQL expression for the domain using tables"
+        table, _ = tables[None]
+        name, operator, value = domain
+        Operator = SQL_OPERATORS[operator]
+        column = Column(table, name)
+        expression = Operator(column, self._domain_value(operator, value))
+        if isinstance(expression, operators.In) and not expression.right:
+            expression = Literal(False)
+        elif isinstance(expression, operators.NotIn) and not expression.right:
+            expression = Literal(True)
+        expression = self._domain_add_null(column, operator, value, expression)
+        return expression
+
+    def convert_order(self, name, tables, Model):
+        "Return a SQL expression to order"
+        table, _ = tables[None]
+        method = getattr(Model, 'order_%s' % name, None)
+        if method:
+            return method(tables)
+        else:
+            return [Column(table, name)]
+
+
+class FieldTranslate(Field):
+
+    def _get_translation_join(self, Model, name,
+            translation, model, table):
+        language = Transaction().language
+        if Model.__name__ == 'ir.model':
+            return table.join(translation, 'LEFT',
+                condition=(translation.name == Concat(table.model, name))
+                & (translation.res_id == -1)
+                & (translation.lang == language)
+                & (translation.type == 'model')
+                & (translation.fuzzy == False))
+        elif Model.__name__ == 'ir.model.field':
+            if name == 'field_description':
+                type_ = 'field'
+            else:
+                type_ = 'help'
+            return table.join(model, 'LEFT',
+                condition=model.id == table.model).join(
+                    translation, 'LEFT',
+                    condition=(translation.name == Concat(Concat(
+                                model.model, ','), table.name))
+                    & (translation.res_id == -1)
+                    & (translation.lang == language)
+                    & (translation.type == type_)
+                    & (translation.fuzzy == False))
+        else:
+            return table.join(translation, 'LEFT',
+                condition=(translation.res_id == table.id)
+                & (translation.name == '%s,%s' % (Model.__name__, name))
+                & (translation.lang == language)
+                & (translation.type == 'model')
+                & (translation.fuzzy == False))
+
+    def convert_domain(self, domain, tables, Model):
+        pool = Pool()
+        Translation = pool.get('ir.translation')
+        IrModel = pool.get('ir.model')
+        if not self.translate:
+            return super(FieldTranslate, self).convert_domain(
+                domain, tables, Model)
+
+        table = Model.__table__()
+        translation = Translation.__table__()
+        model = IrModel.__table__()
+        name, operator, value = domain
+        join = self._get_translation_join(Model, name,
+            translation, model, table)
+        Operator = SQL_OPERATORS[operator]
+        column = Coalesce(NullIf(translation.value, ''),
+            Column(table, name))
+        where = Operator(column, self._domain_value(operator, value))
+        if isinstance(where, operators.In) and not where.right:
+            where = Literal(False)
+        elif isinstance(where, operators.NotIn) and not where.right:
+            where = Literal(True)
+        where = self._domain_add_null(column, operator, value, where)
+        return tables[None][0].id.in_(join.select(table.id, where=where))
+
+    def convert_order(self, name, tables, Model):
+        pool = Pool()
+        Translation = pool.get('ir.translation')
+        IrModel = pool.get('ir.model')
+        if not self.translate:
+            return super(FieldTranslate, self).convert_order(name, tables,
+                Model)
+
+        table, _ = tables[None]
+        key = name + '.translation'
+        if key not in tables:
+            translation = Translation.__table__()
+            model = IrModel.__table__()
+            join = self._get_translation_join(Model, name,
+                translation, model, table)
+            tables[key] = {
+                None: (join.right, join.condition),
+                }
+        else:
+            translation, _ = tables[key][None]
+
+        return [Coalesce(NullIf(translation.value, ''), Column(table, name))]
+
+SQLType = namedtuple('SQLType', 'base type')

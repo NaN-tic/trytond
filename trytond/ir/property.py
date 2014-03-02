@@ -1,42 +1,51 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 from decimal import Decimal
-from trytond.model import ModelView, ModelSQL, fields
-from trytond.transaction import Transaction
-from trytond.cache import Cache
-from trytond.pool import Pool
+from ..model import ModelView, ModelSQL, fields
+from ..transaction import Transaction
+from ..cache import Cache
+from ..pool import Pool
+
+__all__ = [
+    'Property',
+    ]
 
 
 class Property(ModelSQL, ModelView):
     "Property"
-    _name = 'ir.property'
-    _description = __doc__
-    name = fields.Char('Name')
+    __name__ = 'ir.property'
+    _rec_name = 'field'
     value = fields.Reference('Value', selection='models_get')
-    res = fields.Reference('Resource', selection='models_get', select=1)
+    res = fields.Reference('Resource', selection='models_get', select=True)
     field = fields.Many2One('ir.model.field', 'Field',
-        ondelete='CASCADE', required=True, select=1)
+        ondelete='CASCADE', required=True, select=True)
+    _models_get_cache = Cache('ir_property.models_get', context=False)
 
-    @Cache('ir_property.models_get')
-    def models_get(self):
+    @classmethod
+    def models_get(cls):
+        pool = Pool()
+        Model = pool.get('ir.model')
+        models = cls._models_get_cache.get(None)
+        if models:
+            return models
         cursor = Transaction().cursor
-        cursor.execute('SELECT model, name FROM ir_model ORDER BY name ASC')
-        res = cursor.fetchall() + [('', '')]
-        return res
+        model = Model.__table__()
+        cursor.execute(*model.select(model.model, model.name,
+                order_by=model.name.asc))
+        models = cursor.fetchall() + [('', '')]
+        cls._models_get_cache.set(None, models)
+        return models
 
-    def get(self, names, model, res_ids=None):
+    @classmethod
+    def get(cls, names, model, res_ids=None):
         """
-        Return property value for each res_ids
-        :param names: property name or a list of property names
-        :param model: object name
-        :param res_ids: a list of record ids
-        :return: a dictionary
+        Return named property values for each res_ids of model
         """
         pool = Pool()
-        model_access_obj = pool.get('ir.model.access')
+        ModelAccess = pool.get('ir.model.access')
         res = {}
 
-        model_access_obj.check(model, 'read')
+        ModelAccess.check(model, 'read')
 
         names_list = True
         if not isinstance(names, list):
@@ -45,39 +54,29 @@ class Property(ModelSQL, ModelView):
         if res_ids is None:
             res_ids = []
 
-        model_obj = pool.get(model)
-        fields = dict((name, field)
-                for name, field in model_obj._columns.iteritems()
-                if name in names)
-
-        property_ids = self.search([
+        properties = cls.search([
             ('field.name', 'in', names),
             ['OR',
-                ('res', '=', False),
+                ('res', '=', None),
                 ('res', 'in', ['%s,%s' % (model, x) for x in res_ids]),
                 ],
             ], order=[])
-        properties = self.browse(property_ids)
 
-        default_vals = dict((x, False) for x in names)
-        for property in (x for x in properties if not x.res):
-            value = property.value
-            val = False
-            if value:
-                if value.split(',')[0]:
-                    try:
-                        val = int(value.split(',')[1]\
-                                .split(',')[0].strip('('))
-                    except ValueError:
-                        val = False
+        default_vals = dict((x, None) for x in names)
+        for property_ in (x for x in properties if not x.res):
+            value = property_.value
+            val = None
+            if value is not None:
+                if not isinstance(value, basestring):
+                    val = int(value)
                 else:
-                    if property.field.ttype == 'numeric':
+                    if property_.field.ttype == 'numeric':
                         val = Decimal(value.split(',')[1])
-                    elif property.field.ttype in ('char', 'selection'):
+                    elif property_.field.ttype in ('char', 'selection'):
                         val = value.split(',')[1]
                     else:
                         raise Exception('Not implemented')
-            default_vals[property.field.name] = val
+            default_vals[property_.field.name] = val
 
         if not res_ids:
             if not names_list:
@@ -87,81 +86,69 @@ class Property(ModelSQL, ModelView):
         for name in names:
             res[name] = dict((x, default_vals[name]) for x in res_ids)
 
-        for property in (x for x in properties if x.res):
-            val = False
-            if property.value:
-                if property.value.split(',')[0]:
-                    try:
-                        val = int(property.value.split(',')[1]\
-                                .split(',')[0].strip('('))
-                    except ValueError:
-                        val = False
+        for property_ in (x for x in properties if x.res):
+            val = None
+            if property_.value is not None:
+                if not isinstance(property_.value, basestring):
+                    val = int(property_.value)
                 else:
-                    if property.field.ttype == 'numeric':
-                        val = Decimal(property.value.split(',')[1])
-                    elif property.field.ttype in ('char', 'selection'):
-                        val = property.value.split(',')[1]
+                    if property_.field.ttype == 'numeric':
+                        val = Decimal(property_.value.split(',')[1])
+                    elif property_.field.ttype in ('char', 'selection'):
+                        val = property_.value.split(',')[1]
                     else:
                         raise Exception('Not implemented')
-            res[property.field.name][
-                    int(property.res.split(',')[1].split(',')[0].strip('('))] = val
+            res[property_.field.name][int(property_.res)] = val
 
         if not names_list:
             return res[names[0]]
         return res
 
-    def _set_values(self, name, model, res_id, val, field_id):
+    @staticmethod
+    def _set_values(model, res_id, val, field_id):
         return {
-            'name': name,
             'value': val,
             'res': model + ',' + str(res_id),
             'field': field_id,
         }
 
-    def set(self, name, model, ids, val):
+    @classmethod
+    def set(cls, name, model, ids, val):
         """
-        Set property value for ids
-        :param name: property name
-        :param model: object name
-        :param ids: a list of ids
-        :param val: the value
-        :return: the id of the record created
+        Set named property value for ids of model
+        Return the id of the record created
         """
         pool = Pool()
-        model_field_obj = pool.get('ir.model.field')
-        model_access_obj = pool.get('ir.model.access')
+        ModelField = pool.get('ir.model.field')
+        ModelAccess = pool.get('ir.model.access')
 
-        model_access_obj.check(model, 'write')
+        ModelAccess.check(model, 'write')
 
-        field_id = model_field_obj.search([
+        model_field, = ModelField.search([
             ('name', '=', name),
             ('model.model', '=', model),
-            ], order=[], limit=1)[0]
-        model_obj = pool.get(model)
-        field = model_obj._columns[name]
+            ], order=[], limit=1)
+        Model = pool.get(model)
+        field = Model._fields[name]
 
-        property_ids = self.search([
-            ('field', '=', field_id),
+        properties = cls.search([
+            ('field', '=', model_field.id),
             ('res', 'in', [model + ',' + str(res_id) for res_id in ids]),
             ], order=[])
         with Transaction().set_user(0, set_context=True):
-            self.delete(property_ids)
+            cls.delete(properties)
 
-        default_id = self.search([
-            ('field', '=', field_id),
-            ('res', '=', False),
+        defaults = cls.search([
+            ('field', '=', model_field.id),
+            ('res', '=', None),
             ], order=[], limit=1)
-        default_val = False
-        if default_id:
-            value = self.browse(default_id[0]).value
-            default_val = False
-            if value:
-                if value.split(',')[0]:
-                    try:
-                        default_val = int(value.split(',')[1]\
-                                .split(',')[0].strip('('))
-                    except ValueError:
-                        default_val = False
+        default_val = None
+        if defaults:
+            value = cls(defaults[0].id).value
+            default_val = None
+            if value is not None:
+                if not isinstance(value, basestring):
+                    default_val = int(value)
                 else:
                     if field._type == 'numeric':
                         default_val = Decimal(value.split(',')[1])
@@ -170,13 +157,8 @@ class Property(ModelSQL, ModelView):
                     else:
                         raise Exception('Not implemented')
 
-
-        res = False
         if (val != default_val):
             for res_id in ids:
-                vals = self._set_values(name, model, res_id, val, field_id)
+                vals = cls._set_values(model, res_id, val, model_field.id)
                 with Transaction().set_user(0, set_context=True):
-                    res = self.create(vals)
-        return res
-
-Property()
+                    cls.create([vals])

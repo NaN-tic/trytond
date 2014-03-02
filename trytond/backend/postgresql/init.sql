@@ -1,3 +1,11 @@
+CREATE SEQUENCE ir_configuration_id_seq;
+
+CREATE TABLE ir_configuration (
+    id INTEGER DEFAULT NEXTVAL('ir_configuration_id_seq') NOT NULL,
+    language VARCHAR,
+    PRIMARY KEY(id)
+);
+
 CREATE SEQUENCE ir_model_id_seq;
 
 CREATE TABLE ir_model (
@@ -30,9 +38,9 @@ CREATE TABLE ir_ui_view (
     id INTEGER DEFAULT NEXTVAL('ir_ui_view_id_seq') NOT NULL,
     model VARCHAR NOT NULL,
     "type" VARCHAR,
-    arch TEXT NOT NULL,
+    data TEXT NOT NULL,
     field_childs VARCHAR,
-    priority INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL,
     PRIMARY KEY(id)
 );
 
@@ -55,7 +63,7 @@ CREATE TABLE ir_translation (
     src TEXT,
     src_md5 VARCHAR(32) NOT NULL,
     name VARCHAR NOT NULL,
-    res_id INTEGER NOT NULL DEFAULT 0,
+    res_id INTEGER,
     value TEXT,
     "type" VARCHAR,
     module VARCHAR,
@@ -109,89 +117,6 @@ CREATE TABLE "res_user-res_group" (
     PRIMARY KEY(id)
 );
 
-CREATE SEQUENCE wkf_id_seq;
-
-CREATE TABLE wkf (
-    id INTEGER DEFAULT NEXTVAL('wkf_id_seq') NOT NULL,
-    name VARCHAR,
-    model VARCHAR,
-    on_create BOOL NOT NULL,
-    PRIMARY KEY(id)
-);
-
-CREATE SEQUENCE wkf_activity_id_seq;
-
-CREATE TABLE wkf_activity (
-    id INTEGER DEFAULT NEXTVAL('wkf_activity_id_seq') NOT NULL,
-    workflow INTEGER,
-    subflow INTEGER,
-    split_mode VARCHAR NOT NULL,
-    join_mode VARCHAR NOT NULL,
-    name VARCHAR NOT NULL,
-    signal_send VARCHAR,
-    flow_start BOOLEAN NOT NULL,
-    flow_stop BOOLEAN NOT NULL,
-    stop_other BOOLEAN NOT NULL,
-    action VARCHAR,
-    PRIMARY KEY(id),
-    FOREIGN KEY (workflow) REFERENCES wkf (id) ON DELETE CASCADE,
-    FOREIGN KEY (subflow) REFERENCES wkf (id) ON DELETE SET NULL
-);
-
-CREATE SEQUENCE wkf_transition_id_seq;
-
-CREATE TABLE wkf_transition (
-    id INTEGER DEFAULT NEXTVAL('wkf_transition_id_seq') NOT NULL,
-    act_from INTEGER NOT NULL,
-    act_to INTEGER NOT NULL,
-    condition VARCHAR NOT NULL,
-    trigger_expr_id VARCHAR,
-    signal VARCHAR,
-    "group" INTEGER,
-    PRIMARY KEY(id),
-    FOREIGN KEY (act_from) REFERENCES wkf_activity (id) ON DELETE CASCADE,
-    FOREIGN KEY (act_to) REFERENCES wkf_activity (id) ON DELETE CASCADE,
-    FOREIGN KEY ("group") REFERENCES res_group (id) ON DELETE SET NULL
-);
-
-CREATE SEQUENCE wkf_instance_id_seq;
-
-CREATE TABLE wkf_instance (
-    id INTEGER DEFAULT NEXTVAL('wkf_instance_id_seq') NOT NULL,
-    workflow INTEGER,
-    uid INTEGER DEFAULT 0,
-    res_id INT NOT NULL DEFAULT 0,
-    res_type VARCHAR NOT NULL,
-    state VARCHAR NOT NULL,
-    PRIMARY KEY(id),
-    FOREIGN KEY (workflow) REFERENCES wkf (id) ON DELETE RESTRICT
-);
-
-CREATE SEQUENCE wkf_workitem_id_seq;
-
-CREATE TABLE wkf_workitem (
-    id INTEGER DEFAULT NEXTVAL('wkf_workitem_id_seq') NOT NULL,
-    activity INTEGER NOT NULL,
-    instance INTEGER NOT NULL,
-    subflow INTEGER,
-    state VARCHAR,
-    PRIMARY KEY(id),
-    FOREIGN KEY (activity) REFERENCES wkf_activity (id) ON DELETE CASCADE,
-    FOREIGN KEY (instance) REFERENCES wkf_instance (id) ON DELETE CASCADE,
-    FOREIGN KEY (subflow) REFERENCES wkf_instance (id) ON DELETE CASCADE
-);
-
-CREATE SEQUENCE wkf_witm_trans_id_seq;
-
-CREATE TABLE wkf_witm_trans (
-    id INTEGER DEFAULT NEXTVAL('wkf_witm_trans_id_seq') NOT NULL,
-    trans_id INTEGER NOT NULL,
-    inst_id INTEGER NOT NULL,
-    PRIMARY KEY(id),
-    FOREIGN KEY (trans_id) REFERENCES wkf_transition ON DELETE CASCADE,
-    FOREIGN KEY (inst_id) REFERENCES wkf_instance ON DELETE CASCADE
-);
-
 CREATE SEQUENCE ir_module_module_id_seq;
 
 CREATE TABLE ir_module_module (
@@ -200,13 +125,8 @@ CREATE TABLE ir_module_module (
     create_date TIMESTAMP WITHOUT TIME ZONE NOT NULL,
     write_date TIMESTAMP WITHOUT TIME ZONE,
     write_uid INTEGER,
-    website VARCHAR,
     name VARCHAR NOT NULL,
-    author VARCHAR,
-    url VARCHAR,
     state VARCHAR,
-    shortdesc VARCHAR,
-    description TEXT,
     PRIMARY KEY(id),
     FOREIGN KEY (create_uid) REFERENCES res_user ON DELETE SET NULL,
     FOREIGN KEY (write_uid) REFERENCES res_user ON DELETE SET NULL

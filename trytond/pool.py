@@ -6,6 +6,33 @@ from trytond.modules import load_modules, register_classes
 from trytond.transaction import Transaction
 import __builtin__
 
+__all__ = ['Pool', 'PoolMeta', 'PoolBase']
+
+
+class PoolMeta(type):
+
+    def __new__(cls, name, bases, dct):
+        new = type.__new__(cls, name, bases, dct)
+        if '__name__' in dct:
+            new.__name__ = dct['__name__']
+        return new
+
+
+class PoolBase(object):
+    __metaclass__ = PoolMeta
+
+    @classmethod
+    def __setup__(cls):
+        pass
+
+    @classmethod
+    def __post_setup__(cls):
+        pass
+
+    @classmethod
+    def __register__(cls, module_name):
+        pass
+
 
 class Pool(object):
 
@@ -14,6 +41,7 @@ class Pool(object):
         'wizard': {},
         'report': {},
     }
+    _started = False
     _lock = RLock()
     _locks = {}
     _pool = {}
@@ -40,19 +68,18 @@ class Pool(object):
         self.database_name = database_name
 
     @staticmethod
-    def register(klass, type='model'):
+    def register(*classes, **kwargs):
         '''
-        Register a class
-
-        :param klass: the class
-        :param type: the type
+        Register a list of classes
         '''
-        module = None
-        for module in klass.__module__.split('.'):
-            if module != 'trytond' and module != 'modules':
-                break
-        if module:
-            Pool.classes[type].setdefault(module, []).append(klass)
+        module = kwargs['module']
+        type_ = kwargs['type_']
+        assert type_ in ('model', 'report', 'wizard')
+        for cls in classes:
+            mpool = Pool.classes[type_].setdefault(module, [])
+            assert cls not in mpool, cls
+            assert issubclass(cls.__class__, PoolMeta), cls
+            mpool.append(cls)
 
     @classmethod
     def start(cls):
@@ -60,22 +87,10 @@ class Pool(object):
         Start/restart the Pool
         '''
         with cls._lock:
-            reload_p = False
-            prev_classes = {}
-            for type in cls.classes:
-                if cls.classes.get(type):
-                    reload_p = True
-                prev_classes[type] = cls.classes.get(type)
-                cls.classes[type] = {}
-            try:
-                register_classes(reload_p=reload_p)
-            except Exception:
-                if not reload_p:
-                    raise
-                for type in prev_classes:
-                    cls.classes[type] = prev_classes[type]
-            for db_name in cls.database_list():
-                cls(db_name).init()
+            for classes in Pool.classes.itervalues():
+                classes.clear()
+            register_classes()
+            cls._started = True
 
     @classmethod
     def stop(cls, database_name):
@@ -97,19 +112,37 @@ class Pool(object):
         '''
         :return: database list
         '''
-        return cls._pool.keys()
+        with cls._lock:
+            databases = []
+            for database in cls._pool.keys():
+                if cls._locks.get(database):
+                    if cls._locks[database].acquire(False):
+                        databases.append(database)
+                        cls._locks[database].release()
+            return databases
+
+    @property
+    def lock(self):
+        '''
+        Return the database lock for the pool.
+        '''
+        return self._locks[self.database_name]
 
     def init(self, update=False, lang=None):
         '''
         Init pool
-
-        :param database_name: the database name
-        :param update: a boolean to proceed to update
-        :param lang: a list of language code to be updated
+        Set update to proceed to update
+        lang is a list of language code to be updated
         '''
         logger = logging.getLogger('pool')
-        logger.info('init pool for "%s"' % self.database_name)
+        with self._lock:
+            if not self._started:
+                self.start()
         with self._locks[self.database_name]:
+            # Don't reset pool if already init and not to update
+            if not update and self._pool.get(self.database_name):
+                return
+            logger.info('init pool for "%s"' % self.database_name)
             self._pool.setdefault(self.database_name, {})
             #Clean the _pool before loading modules
             for type in self.classes.keys():
@@ -138,22 +171,17 @@ class Pool(object):
                 from trytond.report import Report
                 # Keyword argument 'type' conflicts with builtin function
                 cls = __builtin__.type(str(name), (Report,), {})
-                obj = object.__new__(cls)
-                obj._name = name
-                self.add(obj, type)
-                obj.__init__()
-                return obj
+                cls.__setup__()
+                self.add(cls, type)
+                return cls
             raise
 
-    def add(self, obj, type='model'):
+    def add(self, cls, type='model'):
         '''
-        Add an object to the pool
-
-        :param obj: the object
-        :param type: the type
+        Add a classe to the pool
         '''
         with self._locks[self.database_name]:
-            self._pool[self.database_name][type][obj._name] = obj
+            self._pool[self.database_name][type][cls.__name__] = cls
 
     def object_name_list(self, type='model'):
         '''
@@ -178,23 +206,25 @@ class Pool(object):
         '''
         return self._pool[self.database_name][type].iteritems()
 
-    def instanciate(self, module):
+    def setup(self, module):
         '''
-        Instanciate objects for a module
-
-        :param: the module name
-        :return: a dictionary with each type as key
-            and a list of object as value
+        Setup classes for module and return a list of classes for each type in
+        a dictionary.
         '''
-        res = {}
-        for _type in self.classes.keys():
-            res[_type] = []
-            for cls in self.classes[_type].get(module, []):
-                if cls._name in self._pool[self.database_name][_type].keys():
-                    parent_cls = self.get(cls._name, type=_type).__class__
-                    cls = type(cls._name, (cls, parent_cls), {})
-                obj = object.__new__(cls)
-                self.add(obj, type=_type)
-                obj.__init__()
-                res[_type].append(obj)
-        return res
+        classes = {}
+        for type_ in self.classes.keys():
+            classes[type_] = []
+            for cls in self.classes[type_].get(module, []):
+                try:
+                    previous_cls = self.get(cls.__name__, type=type_)
+                    cls = type(cls.__name__, (cls, previous_cls), {})
+                except KeyError:
+                    pass
+                if not issubclass(cls, PoolBase):
+                    continue
+                cls.__setup__()
+                self.add(cls, type=type_)
+                classes[type_].append(cls)
+            for cls in classes[type_]:
+                cls.__post_setup__()
+        return classes

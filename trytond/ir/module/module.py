@@ -1,27 +1,47 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-import os
+from functools import wraps
+
 from trytond.model import ModelView, ModelSQL, fields
-import trytond.tools as tools
-from trytond.modules import MODULES_PATH, create_graph, get_module_list
-from trytond.wizard import Wizard
-from trytond.backend import Database
+from trytond.modules import create_graph, get_module_list, get_module_info
+from trytond.wizard import Wizard, StateView, Button, StateTransition, \
+    StateAction
+from trytond import backend
 from trytond.pool import Pool
 from trytond.transaction import Transaction
+from trytond.pyson import Eval
+from trytond.rpc import RPC
+
+__all__ = [
+    'Module', 'ModuleDependency', 'ModuleConfigWizardItem',
+    'ModuleConfigWizardFirst', 'ModuleConfigWizardOther',
+    'ModuleConfigWizardDone', 'ModuleConfigWizard',
+    'ModuleInstallUpgradeStart', 'ModuleInstallUpgradeDone',
+    'ModuleInstallUpgrade', 'ModuleConfig',
+    ]
+
+
+def filter_state(state):
+    def filter(func):
+        @wraps(func)
+        def wrapper(cls, modules):
+            modules = [m for m in modules if m.state == state]
+            return func(cls, modules)
+        return wrapper
+    return filter
 
 
 class Module(ModelSQL, ModelView):
     "Module"
-    _name = "ir.module.module"
-    _description = __doc__
+    __name__ = "ir.module.module"
     name = fields.Char("Name", readonly=True, required=True)
-    shortdesc = fields.Char('Short description', readonly=True, translate=True)
-    description = fields.Text("Description", readonly=True, translate=True)
-    author = fields.Char("Author", readonly=True)
-    website = fields.Char("Website", readonly=True)
     version = fields.Function(fields.Char('Version'), 'get_version')
     dependencies = fields.One2Many('ir.module.module.dependency',
         'module', 'Dependencies', readonly=True)
+    parents = fields.Function(fields.One2Many('ir.module.module', None,
+            'Parents'), 'get_parents')
+    childs = fields.Function(fields.One2Many('ir.module.module', None,
+            'Childs'), 'get_childs')
     state = fields.Selection([
         ('uninstalled', 'Not Installed'),
         ('installed', 'Installed'),
@@ -30,565 +50,478 @@ class Module(ModelSQL, ModelView):
         ('to install', 'To be installed'),
         ], string='State', readonly=True)
 
-    def __init__(self):
-        super(Module, self).__init__()
-        self._sql_constraints = [
+    @classmethod
+    def __setup__(cls):
+        super(Module, cls).__setup__()
+        cls._sql_constraints = [
             ('name_uniq', 'unique (name)',
                 'The name of the module must be unique!'),
         ]
-        self._order.insert(0, ('name', 'ASC'))
-        self._rpc.update({
-            'button_install': True,
-            'button_install_cancel': True,
-            'button_uninstall': True,
-            'button_uninstall_cancel': True,
-            'button_upgrade': True,
-            'button_upgrade_cancel': True,
-            'on_write': False,
-        })
-        self._error_messages.update({
-            'delete_state': 'You can not remove a module that is installed ' \
-                    'or will be installed',
+        cls._order.insert(0, ('name', 'ASC'))
+        cls.__rpc__.update({
+                'on_write': RPC(instantiate=0),
+                })
+        cls._error_messages.update({
+            'delete_state': ('You can not remove a module that is installed '
+                    'or will be installed'),
             'missing_dep': 'Missing dependencies %s for module "%s"',
-            'uninstall_dep': 'The modules you are trying to uninstall ' \
-                    'depends on installed modules:',
+            'uninstall_dep': ('The modules you are trying to uninstall '
+                    'depends on installed modules:'),
             })
-
-    def default_state(self):
-        return 'uninstalled'
+        cls._buttons.update({
+                'install': {
+                    'invisible': Eval('state') != 'uninstalled',
+                    },
+                'install_cancel': {
+                    'invisible': Eval('state') != 'to install',
+                    },
+                'uninstall': {
+                    'invisible': Eval('state') != 'installed',
+                    },
+                'uninstall_cancel': {
+                    'invisible': Eval('state') != 'to remove',
+                    },
+                'upgrade': {
+                    'invisible': Eval('state') != 'installed',
+                    },
+                'upgrade_cancel': {
+                    'invisible': Eval('state') != 'to upgrade',
+                    },
+                })
 
     @staticmethod
-    def get_module_info(name):
-        "Return the content of the __tryton__.py"
-        try:
-            if name in ['ir', 'workflow', 'res', 'webdav']:
-                file_p = tools.file_open(os.path.join(name, '__tryton__.py'))
-            else:
-                file_p = tools.file_open(os.path.join(name, '__tryton__.py'))
-            with file_p:
-                data = file_p.read()
-            info = tools.safe_eval(data)
-        except Exception:
-            return {}
-        return info
+    def default_state():
+        return 'uninstalled'
 
-    def get_version(self, ids, name):
-        res = {}
-        for module in self.browse(ids):
-            res[module.id] = Module.get_module_info(
-                    module.name).get('version', '')
-        return res
+    def get_version(self, name):
+        return get_module_info(self.name).get('version', '')
 
-    def delete(self, ids):
-        if not ids:
-            return True
-        if isinstance(ids, (int, long)):
-            ids = [ids]
-        for module in self.browse(ids):
+    @classmethod
+    def get_parents(cls, modules, name):
+        parent_names = list(set(d.name for m in modules
+                    for d in m.dependencies))
+        parents = cls.search([
+                ('name', 'in', parent_names),
+                ])
+        name2id = dict((m.name, m.id) for m in parents)
+        return dict((m.id, [name2id[d.name] for d in m.dependencies])
+            for m in modules)
+
+    @classmethod
+    def get_childs(cls, modules, name):
+        child_ids = dict((m.id, []) for m in modules)
+        name2id = dict((m.name, m.id) for m in modules)
+        childs = cls.search([
+                ('dependencies.name', 'in', name2id.keys()),
+                ])
+        for child in childs:
+            for dep in child.dependencies:
+                if dep.name in name2id:
+                    child_ids[name2id[dep.name]].append(child.id)
+        return child_ids
+
+    @classmethod
+    def delete(cls, records):
+        for module in records:
             if module.state in (
                     'installed',
                     'to upgrade',
                     'to remove',
                     'to install',
                     ):
-                self.raise_user_error('delete_state')
-        return super(Module, self).delete(ids)
+                cls.raise_user_error('delete_state')
+        return super(Module, cls).delete(records)
 
-    def on_write(self, ids):
-        if not ids:
-            return []
-        res = []
-        graph, packages, later = create_graph(get_module_list())
-        for module in self.browse(ids):
-            if module.name not in graph:
-                continue
-            def get_parents(name, graph):
-                parents = set()
-                for node in graph:
-                    if graph[name] in node.childs:
-                        parents.add(node.name)
-                for parent in parents.copy():
-                    parents.update(get_parents(parent, graph))
-                return parents
-            dependencies = get_parents(module.name, graph)
-            def get_childs(name, graph):
-                childs = set(x.name for x in graph[name].childs)
-                childs2 = set()
-                for child in childs:
-                    childs2.update(get_childs(child, graph))
-                childs.update(childs2)
-                return childs
-            dependencies.update(get_childs(module.name, graph))
-            res += self.search([
-                ('name', 'in', list(dependencies)),
-                ])
-        return list({}.fromkeys(res))
+    @classmethod
+    def on_write(cls, modules):
+        dependencies = set()
 
-    def state_install(self, ids):
+        def get_parents(module):
+            parents = set(p.id for p in module.parents)
+            for p in module.parents:
+                parents.update(get_parents(p))
+            return parents
+
+        def get_childs(module):
+            childs = set(c.id for c in module.childs)
+            for c in module.childs:
+                childs.update(get_childs(c))
+            return childs
+
+        for module in modules:
+            dependencies.update(get_parents(module))
+            dependencies.update(get_childs(module))
+        return list(dependencies)
+
+    @classmethod
+    @ModelView.button
+    @filter_state('uninstalled')
+    def install(cls, modules):
+        modules_install = set(modules)
         graph, packages, later = create_graph(get_module_list())
-        for module in self.browse(ids):
+
+        def get_parents(module):
+            parents = set(p for p in module.parents)
+            for p in module.parents:
+                parents.update(get_parents(p))
+            return parents
+
+        for module in modules:
             if module.name not in graph:
                 missings = []
-                for package, deps, datas in packages:
+                for package, deps, xdep, info in packages:
                     if package == module.name:
                         missings = [x for x in deps if x not in graph]
-                self.raise_user_error('missing_dep', (missings, module.name))
-            def get_parents(name, graph):
-                parents = set()
-                for node in graph:
-                    if graph[name] in node.childs:
-                        parents.add(node.name)
-                for parent in parents.copy():
-                    parents.update(get_parents(parent, graph))
-                return parents
-            dependencies = list(get_parents(module.name, graph))
-            module_install_ids = self.search([
-                ('name', 'in', dependencies),
-                ('state', '=', 'uninstalled'),
-                ])
-            self.write(module_install_ids + [module.id], {
+                cls.raise_user_error('missing_dep', (missings, module.name))
+
+            modules_install.update((m for m in get_parents(module)
+                    if m.state == 'uninstalled'))
+        cls.write(list(modules_install), {
                 'state': 'to install',
                 })
 
-    def state_upgrade(self, ids):
+    @classmethod
+    @ModelView.button
+    @filter_state('installed')
+    def upgrade(cls, modules):
+        modules_installed = set(modules)
         graph, packages, later = create_graph(get_module_list())
-        for module in self.browse(ids):
+
+        def get_childs(module):
+            childs = set(c for c in module.childs)
+            for c in module.childs:
+                childs.update(get_childs(c))
+            return childs
+
+        for module in modules:
             if module.name not in graph:
                 missings = []
-                for package, deps, datas in packages:
+                for package, deps, xdep, info in packages:
                     if package == module.name:
                         missings = [x for x in deps if x not in graph]
-                self.raise_user_error('missing_dep', (missings, module.name))
-            def get_childs(name, graph):
-                childs = set(x.name for x in graph[name].childs)
-                childs2 = set()
-                for child in childs:
-                    childs2.update(get_childs(child, graph))
-                childs.update(childs2)
-                return childs
-            dependencies = list(get_childs(module.name, graph))
-            module_installed_ids = self.search([
-                ('name', 'in', dependencies),
-                ('state', '=', 'installed'),
-                ])
-            self.write(module_installed_ids + [module.id], {
+                cls.raise_user_error('missing_dep', (missings, module.name))
+
+            modules_installed.update((m for m in get_childs(module)
+                    if m.state == 'installed'))
+        cls.write(list(modules_installed), {
                 'state': 'to upgrade',
                 })
 
-    def button_install(self, ids):
-        return self.state_install(ids)
+    @classmethod
+    @ModelView.button
+    @filter_state('to install')
+    def install_cancel(cls, modules):
+        cls.write(modules, {
+                'state': 'uninstalled',
+                })
 
-    def button_install_cancel(self, ids):
-        self.write(ids, {
-            'state': 'uninstalled',
-            })
-        return True
-
-    def button_uninstall(self, ids):
+    @classmethod
+    @ModelView.button
+    @filter_state('installed')
+    def uninstall(cls, modules):
         cursor = Transaction().cursor
-        for module in self.browse(ids):
-            cursor.execute('SELECT m.state, m.name ' \
-                    'FROM ir_module_module_dependency d ' \
-                    'JOIN ir_module_module m on (d.module = m.id) ' \
-                    'WHERE d.name = %s ' \
-                        'AND m.state not in ' \
-                        '(\'uninstalled\', \'to remove\')',
-                            (module.name,))
+        for module in modules:
+            cursor.execute('SELECT m.state, m.name '
+                'FROM ir_module_module_dependency d '
+                'JOIN ir_module_module m on (d.module = m.id) '
+                'WHERE d.name = %s '
+                    'AND m.state not in '
+                    '(\'uninstalled\', \'to remove\')',
+                (module.name,))
             res = cursor.fetchall()
             if res:
-                self.raise_user_error('uninstall_dep',
+                cls.raise_user_error('uninstall_dep',
                         error_description='\n'.join(
                             '\t%s: %s' % (x[0], x[1]) for x in res))
-        self.write(ids, {'state': 'to remove'})
-        return True
+        cls.write(modules, {'state': 'to remove'})
 
-    def button_uninstall_cancel(self, ids):
-        self.write(ids, {'state': 'installed'})
-        return True
+    @classmethod
+    @ModelView.button
+    @filter_state('to remove')
+    def uninstall_cancel(cls, modules):
+        cls.write(modules, {'state': 'installed'})
 
-    def button_upgrade(self, ids):
-        return self.state_upgrade(ids)
+    @classmethod
+    @ModelView.button
+    @filter_state('to upgrade')
+    def upgrade_cancel(cls, modules):
+        cls.write(modules, {'state': 'installed'})
 
-    def button_upgrade_cancel(self, ids):
-        self.write(ids, {'state': 'installed'})
-        return True
+    @classmethod
+    def update_list(cls):
+        'Update the list of available packages'
+        count = 0
+        module_names = get_module_list()
 
-    # update the list of available packages
-    def update_list(self):
+        modules = cls.search([])
+        name2module = dict((m.name, m) for m in modules)
+
+        # iterate through installed modules and mark them as being so
+        for name in module_names:
+            if name in name2module:
+                module = name2module[name]
+                tryton = get_module_info(name)
+                cls._update_dependencies(module, tryton.get('depends', []))
+                continue
+
+            tryton = get_module_info(name)
+            if not tryton:
+                continue
+            module, = cls.create([{
+                        'name': name,
+                        'state': 'uninstalled',
+                        }])
+            count += 1
+            cls._update_dependencies(module, tryton.get('depends', []))
+        return count
+
+    @classmethod
+    def _update_dependencies(cls, module, depends=None):
         pool = Pool()
-        lang_obj = pool.get('ir.lang')
-        res = 0
-        with Transaction().set_context(language=False):
-            lang_ids = lang_obj.search([
-                ('translatable', '=', True),
-                ])
-            lang_codes = [x.code for x in lang_obj.browse(lang_ids)]
-
-            module_names = get_module_list()
-
-            module_ids = self.search([])
-            modules = self.browse(module_ids)
-            name2module = {}
-            for module in modules:
-                name2module.setdefault(module.name, {})
-                name2module[module.name]['en_US'] = module
-            for code in lang_codes:
-                with Transaction().set_context(language=code):
-                    modules = self.browse(module_ids)
-                for module in modules:
-                    name2module[module.name][code] = module
-
-            # iterate through installed modules and mark them as being so
-            for name in module_names:
-                mod_name = name
-                if mod_name in name2module.keys():
-                    mod = name2module[mod_name]['en_US']
-                    tryton = Module.get_module_info(mod_name)
-
-                    if mod.description != tryton.get('description',
-                            '').decode('utf-8', 'ignore') \
-                            or mod.shortdesc != tryton.get('name',
-                                    '').decode('utf-8', 'ignore') \
-                            or mod.author != tryton.get('author',
-                                    '').decode('utf-8', 'ignore') \
-                            or mod.website != tryton.get('website',
-                                    '').decode('utf-8', 'ignore'):
-                        self.write(mod.id, {
-                            'description': tryton.get('description', ''),
-                            'shortdesc': tryton.get('name', ''),
-                            'author': tryton.get('author', ''),
-                            'website': tryton.get('website', ''),
-                            })
-
-                    for code in lang_codes:
-                        mod2 = name2module[mod_name][code]
-                        if mod2.description != \
-                                tryton.get('description_' + code,
-                                        tryton.get('description', '')
-                                        ).decode('utf-8', 'ignore') \
-                                or mod2.shortdesc != \
-                                tryton.get('name_' + code,
-                                        tryton.get('name', '')
-                                        ).decode('utf-8', 'ignore'):
-                            with Transaction().set_context(language=code):
-                                self.write(mod.id, {
-                                    'description': tryton.get(
-                                        'description_' + code, ''),
-                                    'shortdesc': tryton.get(
-                                        'name_' + code, ''),
-                                    })
-
-                    self._update_dependencies(mod, tryton.get('depends', []))
-                    continue
-
-                if name in ['ir', 'workflow', 'res', 'webdav']:
-                    mod_path = os.path.join(
-                            os.path.dirname(MODULES_PATH), name)
-                else:
-                    mod_path = os.path.join(MODULES_PATH, name)
-
-                tryton = Module.get_module_info(mod_name)
-                if not tryton:
-                    continue
-                new_id = self.create({
-                    'name': mod_name,
-                    'state': 'uninstalled',
-                    'description': tryton.get('description', ''),
-                    'shortdesc': tryton.get('name', ''),
-                    'author': tryton.get('author', 'Unknown'),
-                    'website': tryton.get('website', ''),
-                })
-                for code in lang_codes:
-                    with Transaction().set_context(language=code):
-                        self.write(new_id, {
-                            'description': tryton.get(
-                                'description_' + code, ''),
-                            'shortdesc': tryton.get('name_' + code, ''),
-                            })
-                res += 1
-                name2module.setdefault(mod_name, {})
-                name2module[mod_name]['en_US'] = self.browse(new_id)
-                self._update_dependencies(name2module[mod_name]['en_US'],
-                        tryton.get('depends', []))
-        return res
-
-    def _update_dependencies(self, module, depends=None):
-        pool = Pool()
-        dependency_obj = pool.get('ir.module.module.dependency')
-        dependency_obj.delete([x.id for x in module.dependencies
+        Dependency = pool.get('ir.module.module.dependency')
+        Dependency.delete([x for x in module.dependencies
             if x.name not in depends])
         if depends is None:
             depends = []
         # Restart Browse Cache for deleted dependencies
-        module = self.browse(module.id)
+        module = cls(module.id)
         dependency_names = [x.name for x in module.dependencies]
+        to_create = []
         for depend in depends:
             if depend not in dependency_names:
-                dependency_obj.create({
-                    'module': module.id,
-                    'name': depend,
-                    })
-
-Module()
+                to_create.append({
+                        'module': module.id,
+                        'name': depend,
+                        })
+        if to_create:
+            Dependency.create(to_create)
 
 
 class ModuleDependency(ModelSQL, ModelView):
     "Module dependency"
-    _name = "ir.module.module.dependency"
-    _description = __doc__
+    __name__ = "ir.module.module.dependency"
     name = fields.Char('Name')
-    module = fields.Many2One('ir.module.module', 'Module', select=1,
+    module = fields.Many2One('ir.module.module', 'Module', select=True,
        ondelete='CASCADE', required=True)
     state = fields.Function(fields.Selection([
-        ('uninstalled','Not Installed'),
-        ('installed','Installed'),
-        ('to upgrade','To be upgraded'),
-        ('to remove','To be removed'),
-        ('to install','To be installed'),
-        ('unknown', 'Unknown'),
-        ], 'State', readonly=True), 'get_state')
+                ('uninstalled', 'Not Installed'),
+                ('installed', 'Installed'),
+                ('to upgrade', 'To be upgraded'),
+                ('to remove', 'To be removed'),
+                ('to install', 'To be installed'),
+                ('unknown', 'Unknown'),
+                ], 'State', readonly=True), 'get_state')
 
-    def __init__(self):
-        super(ModuleDependency, self).__init__()
-        self._sql_constraints += [
+    @classmethod
+    def __setup__(cls):
+        super(ModuleDependency, cls).__setup__()
+        cls._sql_constraints += [
             ('name_module_uniq', 'UNIQUE(name, module)',
                 'Dependency must be unique by module!'),
         ]
 
-    def get_state(self, ids, name):
-        result = {}
+    def get_state(self, name):
         pool = Pool()
-        module_obj = pool.get('ir.module.module')
-        for dependency in self.browse(ids):
-            ids = module_obj.search([
-                ('name', '=', dependency.name),
+        Module = pool.get('ir.module.module')
+        dependencies = Module.search([
+                ('name', '=', self.name),
                 ])
-            if ids:
-                result[dependency.id] = module_obj.browse(ids[0]).state
-            else:
-                result[dependency.id] = 'unknown'
-        return result
-
-ModuleDependency()
+        if dependencies:
+            return dependencies[0].state
+        else:
+            return 'unknown'
 
 
 class ModuleConfigWizardItem(ModelSQL, ModelView):
     "Config wizard to run after installing module"
-    _name = 'ir.module.module.config_wizard.item'
-    _description = __doc__
-    name = fields.Char('Name', required=True, readonly=True)
-    sequence= fields.Integer('Sequence')
+    __name__ = 'ir.module.module.config_wizard.item'
+    _rec_name = 'action'
+    action = fields.Many2One('ir.action', 'Action', required=True,
+        readonly=True)
+    sequence = fields.Integer('Sequence', required=True)
     state = fields.Selection([
         ('open', 'Open'),
         ('done', 'Done'),
-        ], string='State', required=True, select=1)
+        ], string='State', required=True, select=True)
 
-    def __init__(self):
-        super(ModuleConfigWizardItem, self).__init__()
-        self._order.insert(0, ('sequence', 'ASC'))
+    @classmethod
+    def __setup__(cls):
+        super(ModuleConfigWizardItem, cls).__setup__()
+        cls._order.insert(0, ('sequence', 'ASC'))
 
-    def default_state(self):
+    @classmethod
+    def __register__(cls, module_name):
+        TableHandler = backend.get('TableHandler')
+        table = TableHandler(Transaction().cursor, cls, module_name)
+
+        # Migrate from 2.2 remove name
+        table.drop_column('name')
+
+        super(ModuleConfigWizardItem, cls).__register__(module_name)
+
+    @staticmethod
+    def default_state():
         return 'open'
 
-    def default_sequence(self):
+    @staticmethod
+    def default_sequence():
         return 10
-
-ModuleConfigWizardItem()
 
 
 class ModuleConfigWizardFirst(ModelView):
     'Module Config Wizard First'
-    _name = 'ir.module.module.config_wizard.first'
-    _description = __doc__
+    __name__ = 'ir.module.module.config_wizard.first'
 
-ModuleConfigWizardFirst()
+
+class ModuleConfigWizardOther(ModelView):
+    'Module Config Wizard Other'
+    __name__ = 'ir.module.module.config_wizard.other'
+
+    percentage = fields.Float('Percentage', readonly=True)
+
+    @staticmethod
+    def default_percentage():
+        pool = Pool()
+        Item = pool.get('ir.module.module.config_wizard.item')
+        done = Item.search([
+            ('state', '=', 'done'),
+            ], count=True)
+        all = Item.search([], count=True)
+        return 100.0 * done / all
+
+
+class ModuleConfigWizardDone(ModelView):
+    'Module Config Wizard Done'
+    __name__ = 'ir.module.module.config_wizard.done'
 
 
 class ModuleConfigWizard(Wizard):
     'Run config wizards'
-    _name = 'ir.module.module.config_wizard'
-    states = {
-        'init': {
-            'result': {
-                'type': 'choice',
-                'next_state': '_first',
-            },
-        },
-        'first': {
-            'result': {
-                'type': 'form',
-                'object': 'ir.module.module.config_wizard.first',
-                'state': [
-                    ('end', 'Cancel', 'tryton-cancel'),
-                    ('wizard', 'Ok', 'tryton-ok', True),
-                ],
-            },
-        },
-        'wizard': {
-            'result': {
-                'type': 'action',
-                'action': '_action_wizard',
-                'state': 'next',
-            },
-        },
-        'next': {
-            'result': {
-                'type': 'choice',
-                'next_state': '_next',
-            },
-        },
-    }
+    __name__ = 'ir.module.module.config_wizard'
 
-    def _first(self, data):
-        res = self._next(data)
-        if res == 'wizard':
+    class ConfigStateAction(StateAction):
+
+        def __init__(self):
+            StateAction.__init__(self, None)
+
+        def get_action(self):
+            pool = Pool()
+            Item = pool.get('ir.module.module.config_wizard.item')
+            Action = pool.get('ir.action')
+            items = Item.search([
+                ('state', '=', 'open'),
+                ], limit=1)
+            if items:
+                item = items[0]
+                Item.write([item], {
+                        'state': 'done',
+                        })
+                return Action.get_action_values(item.action.type,
+                    [item.action.id])[0]
+
+    start = StateTransition()
+    first = StateView('ir.module.module.config_wizard.first',
+        'ir.module_config_wizard_first_view_form', [
+            Button('Cancel', 'end', 'tryton-cancel'),
+            Button('Ok', 'action', 'tryton-ok', default=True),
+            ])
+    other = StateView('ir.module.module.config_wizard.other',
+        'ir.module_config_wizard_other_view_form', [
+            Button('Cancel', 'end', 'tryton-cancel'),
+            Button('Next', 'action', 'tryton-go-next', default=True),
+            ])
+    action = ConfigStateAction()
+    done = StateView('ir.module.module.config_wizard.done',
+        'ir.module_config_wizard_done_view_form', [
+            Button('Ok', 'end', 'tryton-close', default=True),
+            ])
+
+    def transition_start(self):
+        res = self.transition_action()
+        if res == 'other':
             return 'first'
         return res
 
-    def _action_wizard(self, data):
+    def transition_action(self):
         pool = Pool()
-        item_obj = pool.get('ir.module.module.config_wizard.item')
-        item_ids = item_obj.search([
-            ('state', '=', 'open'),
-            ], limit=1)
-        if item_ids:
-            item = item_obj.browse(item_ids[0])
-            item_obj.write(item.id, {
-                'state': 'done',
-                })
-            return {
-                    'type': 'ir.action.wizard',
-                    'wiz_name': item.name,
-                    }
-        return {}
-
-    def _next(self, data):
-        pool = Pool()
-        item_obj = pool.get('ir.module.module.config_wizard.item')
-        item_ids = item_obj.search([
-            ('state', '=', 'open'),
-            ])
-        if item_ids:
-            return 'wizard'
-        return 'end'
-
-ModuleConfigWizard()
-
-
-class ModuleInstallUpgradeInit(ModelView):
-    'Module Install Upgrade Init'
-    _name = 'ir.module.module.install_upgrade.init'
-    _description = __doc__
-    module_info = fields.Text('Modules to update', readonly=True)
-
-ModuleInstallUpgradeInit()
+        Item = pool.get('ir.module.module.config_wizard.item')
+        items = Item.search([
+                ('state', '=', 'open'),
+                ])
+        if items:
+            return 'other'
+        return 'done'
 
 
 class ModuleInstallUpgradeStart(ModelView):
     'Module Install Upgrade Start'
-    _name = 'ir.module.module.install_upgrade.start'
-    _description = __doc__
+    __name__ = 'ir.module.module.install_upgrade.start'
+    module_info = fields.Text('Modules to update', readonly=True)
 
-ModuleInstallUpgradeStart()
+
+class ModuleInstallUpgradeDone(ModelView):
+    'Module Install Upgrade Done'
+    __name__ = 'ir.module.module.install_upgrade.done'
 
 
 class ModuleInstallUpgrade(Wizard):
     "Install / Upgrade modules"
-    _name = 'ir.module.module.install_upgrade'
+    __name__ = 'ir.module.module.install_upgrade'
 
-    def _get_install(self, data):
-        pool = Pool()
-        module_obj = pool.get('ir.module.module')
-        module_ids = module_obj.search([
-            ('state', 'in', ['to upgrade', 'to remove', 'to install']),
+    start = StateView('ir.module.module.install_upgrade.start',
+        'ir.module_install_upgrade_start_view_form', [
+            Button('Cancel', 'end', 'tryton-cancel'),
+            Button('Start Upgrade', 'upgrade', 'tryton-ok', default=True),
             ])
-        modules = module_obj.browse(module_ids)
-        return {
-            'module_info': '\n'.join(x.name + ': ' + x.state \
-                    for x in modules),
-        }
+    upgrade = StateTransition()
+    done = StateView('ir.module.module.install_upgrade.done',
+        'ir.module_install_upgrade_done_view_form', [
+            Button('Ok', 'config', 'tryton-ok', default=True),
+            ])
+    config = StateAction('ir.act_module_config_wizard')
 
-    def _upgrade_module(self, data):
+    @staticmethod
+    def default_start(fields):
         pool = Pool()
-        module_obj = pool.get('ir.module.module')
-        lang_obj = pool.get('ir.lang')
-        with Transaction().new_cursor() as transaction:
-            module_ids = module_obj.search([
+        Module = pool.get('ir.module.module')
+        modules = Module.search([
                 ('state', 'in', ['to upgrade', 'to remove', 'to install']),
                 ])
-            lang_ids = lang_obj.search([
+        return {
+            'module_info': '\n'.join(x.name + ': ' + x.state
+                for x in modules),
+            }
+
+    def __init__(self, session_id):
+        pass
+
+    def _save(self):
+        pass
+
+    def transition_upgrade(self):
+        pool = Pool()
+        Module = pool.get('ir.module.module')
+        Lang = pool.get('ir.lang')
+        with Transaction().new_cursor() as transaction:
+            modules = Module.search([
+                ('state', 'in', ['to upgrade', 'to remove', 'to install']),
+                ])
+            langs = Lang.search([
                 ('translatable', '=', True),
                 ])
-            lang = [x.code for x in lang_obj.browse(lang_ids)]
+            lang = [x.code for x in langs]
             transaction.cursor.commit()
-        if module_ids:
+        if modules:
             pool.init(update=True, lang=lang)
-            new_wizard = pool.get('ir.module.module.install_upgrade',
-                    type='wizard')
-            new_wizard._lock.acquire()
-            new_wizard._datas[data['_wiz_id']] = self._datas[data['_wiz_id']]
-            new_wizard._lock.release()
-        return {}
-
-    states = {
-        'init': {
-            'actions': ['_get_install'],
-            'result': {
-                'type': 'form',
-                'object': 'ir.module.module.install_upgrade.init',
-                'state': [
-                    ('end', 'Cancel', 'tryton-cancel'),
-                    ('start', 'Start Upgrade', 'tryton-ok', True),
-                ],
-            },
-        },
-        'start': {
-            'actions': ['_upgrade_module'],
-            'result': {
-                'type': 'form',
-                'object': 'ir.module.module.install_upgrade.start',
-                'state': [
-                    ('config', 'Ok', 'tryton-ok', True),
-                ],
-            },
-        },
-        'config': {
-            'result': {
-                'type': 'action',
-                'action': '_config',
-                'state': 'end',
-            },
-        },
-    }
-
-    def _config(self, data):
-        return {
-                'type': 'ir.action.wizard',
-                'wiz_name': 'ir.module.module.config_wizard',
-                }
-
-ModuleInstallUpgrade()
+        return 'done'
 
 
 class ModuleConfig(Wizard):
     'Configure Modules'
-    _name = 'ir.module.module.config'
-    states = {
-        'init': {
-            'result': {
-                'type': 'action',
-                'action': '_action_open',
-                'state': 'end',
-            },
-        },
-    }
+    __name__ = 'ir.module.module.config'
 
-    def _action_open(self, datas):
-        pool = Pool()
-        model_data_obj = pool.get('ir.model.data')
-        act_window_obj = pool.get('ir.action.act_window')
-        act_window_id = model_data_obj.get_id('ir', 'act_module_form')
-        res = act_window_obj.read(act_window_id)
-        return res
+    start = StateAction('ir.act_module_form')
 
-ModuleConfig()
+    @staticmethod
+    def transition_start():
+        return 'end'

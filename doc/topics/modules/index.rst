@@ -6,7 +6,7 @@ Modules
 
 The modules of Tryton extend the functionality of the platform. The server
 comes by default with only a basic functionality included in these modules:
-``ir``, ``res``, ``webdav``, ``workflow``.
+``ir``, ``res``, ``webdav``.
 
 Module Structure
 ================
@@ -15,76 +15,44 @@ A module is a directory in trytond/modules which contains at least two files:
 
    * ``__init__.py``: a Tryton module must be a Python module.
 
-   * ``__tryton__.py``: a Python file that describes the Tryton module.
+   * ``tryton.cfg``: a Configuration file that describes the Tryton module.
 
 ``__init__.py`` file
 --------------------
 
-It is the Python ``__init__.py`` to define a module. It must import all the
-Python files from the module.
+It is the Python ``__init__.py`` to define a module. It must contains a method
+named `register()` that must register to the pool all the objects of the module.
 
 
-``__tryton__.py`` file
-----------------------
+``tryton.cfg`` file
+-------------------
 
-It is a Python file that must contain only one dictionary with those keywords:
-
-   * ``name``: The name of the module.
-
-   * ``name_language_code``: The name of the module in the language code.
+It is a configuration file using the format of `ConfigParser`_ that must
+contain `tryton` section with this following name:
 
    * ``version``: The version number of the module.
 
-   * ``author``: The author name of the module.
+   * ``depends``: A one per line list of modules on which this module depends.
 
-   * ``email``: The email address of the author (optional).
+   * ``extras_depend``: A one per line list of modules on which this module
+     *may* depend.
 
-   * ``website``: The url of the website for the module (optional).
+   * ``xml``: The one per line list of the XML files of the module. They will
+     be loaded in the given order at the installation or update of the module.
 
-   * ``description``: A long description of the module.
+Here is an example::
 
-   * ``description_language_code``: The long description in the language code.
-
-   * ``depends``: A list of modules on which this module depends.
-
-   * ``xml``: The list of the XML files of the module. They will be loaded in
-     the given order at the installation or update of the module.
-
-   * ``translation``: The list of csv files that contain the translation. The
-     name of the files must be the language code.
-
-
-Here is an example:
-
-.. highlight:: python
-
-::
-
-  {
-      "name" : "Party",
-      "version" : "0.0.1",
-      "author" : "B2CK",
-      'email': 'info@b2ck.com',
-      'website': 'http://www.tryton.org/',
-      "category" : "Generic",
-      "description": "Define parties, addresses and co.",
-      "depends" : [
-          "ir",
-          "res",
-          "country",
-      ],
-      "xml" : [
-          "party.xml",
-          "category.xml",
-          "address.xml",
-          "contact_mechanism.xml",
-      ],
-      'translation': [
-          'fr_FR.csv',
-          'de_DE.csv',
-          'es_ES.csv',
-      ],
-  }
+    [tryton]
+    version=0.0.1
+    depends:
+        ir
+        res
+        country
+    xml:
+        party.xml
+        category.xml
+        address.xml
+        contact_mechanism.xml
 
 Python Files
 ============
@@ -142,8 +110,12 @@ Here is the list of the tags:
     * ``tryton``: The main tag of the xml
 
     * ``data``: Define a set of data inside the file. It can have the
-      attributes ``noupdate`` to prevent the framework to update the records
-      and ``skiptest`` to prevent import of data when running tests.
+      attributes:
+        * ``noupdate`` to prevent the framework to update the records,
+        * ``skiptest`` to prevent import of data when running tests,
+        * ``depends`` to import data only if all modules in the comma separated
+          module list value are installed,
+        * ``grouped`` to create records at the end with a grouped call.
 
     * ``record``: Create a record of the model defined by the attribute
       ``model`` in the database. The ``id`` attribute can be used to refer to
@@ -192,3 +164,6 @@ Here is the list of the tags:
           separated by commas.
 
         * ``active``: A boolean telling if the menu is active or not.
+
+
+.. _ConfigParser: http://docs.python.org/library/configparser.html

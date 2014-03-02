@@ -20,34 +20,6 @@ attlist.form &= attribute on_write { text }?
 attlist.form &= [ a:defaultValue = "4" ] attribute col { text }?
 attlist.form &= attribute cursor { text }?
 
-tree = element tree { attlist.tree, field* }
-attlist.tree &=
-  [ a:defaultValue = "Unknown" ] attribute string { text }?
-attlist.tree &= attribute on_write { text }?
-attlist.tree &= attribute editable { "top" | "bottom" }?
-attlist.tree &= attribute sequence { text }?
-attlist.tree &= attribute colors { text }?
-attlist.tree &=
-  [ a:defaultValue = "0" ] attribute fill { "0" | "1" }?
-
-graph = element graph { attlist.graph, x, y }
-attlist.graph &=
-  [ a:defaultValue = "vbar" ]
-  attribute type { "vbar" | "hbar" | "line" | "pie" }?
-attlist.graph &=
-  [ a:defaultValue = "Unknown" ] attribute string { text }?
-attlist.graph &=
-  [ a:defaultValue = "#f5f5f5" ] attribute background { text }?
-attlist.graph &= [ a:defaultValue = "blue" ] attribute color { text }?
-attlist.graph &=
-  [ a:defaultValue = "1" ] attribute legend { "0" | "1" }?
-
-x = element x { attlist.x, field }
-attlist.x &= empty
-
-y = element y { attlist.y, field+ }
-attlist.y &= empty
-
 label = element label { attlist.label, empty }
 attlist.label &= [ a:defaultValue = "" ] attribute string { text }?
 attlist.label &= ( attribute name { text } | attribute id { text } )
@@ -63,34 +35,37 @@ attlist.label &= [ a:defaultValue = "1" ] attribute xfill { "0" | "1" }?
 attlist.label &= [ a:defaultValue = "1" ] attribute colspan { text }?
 attlist.label &= attribute help { text }?
 
-field = element field { attlist.field, (tree | form | graph)* }
+field = element field { attlist.field, empty }
 attlist.field &= attribute name { text }
 attlist.field &= [ a:defaultValue = "1" ] attribute colspan { text }?
 attlist.field &=
   attribute widget {
     "date"
-    | "char"
-    | "many2one"
-    | "date"
-    | "one2many"
-    | "selection"
+    | "datetime"
+    | "time"
     | "float"
     | "numeric"
-    | "float_time"
     | "integer"
-    | "datetime"
-    | "boolean"
-    | "text"
-    | "url"
-    | "email"
-    | "callto"
-    | "sip"
+    | "selection"
+    | "char"
     | "sha"
+    | "float_time"
+    | "boolean"
     | "reference"
     | "binary"
+    | "text"
+    | "one2many"
     | "many2many"
+    | "many2one"
+    | "email"
+    | "url"
+    | "callto"
+    | "sip"
     | "image"
     | "progressbar"
+    | "one2one"
+    | "richtext"
+    | "dict"
   }?
 attlist.field &= attribute fill { "0" | "1" }?
 attlist.field &= attribute yexpand { "0" | "1" }?
@@ -108,11 +83,11 @@ attlist.field &= attribute readonly { "0" | "1" }?
 attlist.field &=
   [ a:defaultValue = "0" ] attribute tree_invisible { "0" | "1" }?
 attlist.field &= attribute mode { text }?
+attlist.field &= attribute view_ids { text }?
 attlist.field &=
   [ a:defaultValue = "0" ] attribute invisible { "0" | "1" }?
 attlist.field &= attribute sum { text }?
 attlist.field &= attribute key { text }?
-attlist.field &= attribute domain { text }?
 attlist.field &= attribute color { text }?
 attlist.field &=
   [ a:defaultValue = "left_to_right" ] attribute orientation {
@@ -127,6 +102,12 @@ attlist.field &= attribute img_width { text }?
 attlist.field &= attribute img_height { text }?
 attlist.field &=
   [a:defaultValue = "0"] attribute filename_visible { "0" | "1" }?
+attlist.field &= [a:defaultValue = "0"] attribute pre_validate { "0" | "1" }?
+attlist.field &= attribute icon { text }?
+attlist.field &= [a:defaultValue = "1"] attribute completion { "0" | "1" }?
+attlist.field &= attribute string { text }?
+attlist.field &= [a:defaultValue = "1"] attribute factor { text }?
+attlist.field &= attribute filename { text }?
 image = element image { attlist.image, empty }
 attlist.image &= attribute name { text }
 attlist.image &= [ a:defaultValue = "1" ] attribute colspan { text }?
@@ -163,14 +144,11 @@ attlist.button &= attribute help { text }?
 attlist.button &=
   [ a:defaultValue = "Unknown" ] attribute string { text }?
 attlist.button &= attribute icon { text }?
-attlist.button &=
-  [ a:defaultValue = "workflow" ]
-  attribute type { "workflow" | "object" | "action" }?
 attlist.button &= attribute confirm { text }?
 attlist.button &= attribute name { text }
-attlist.button &= attribute states { text }?
 notebook = element notebook { attlist.notebook, page* }
 attlist.notebook &= [ a:defaultValue = "4" ] attribute colspan { text }?
+attlist.notebook &= attribute states { text }?
 page =
   element page {
     attlist.page,
@@ -218,6 +196,7 @@ attlist.group &= [ a:defaultValue = "1" ] attribute rowspan { text }?
 attlist.group &= [ a:defaultValue = "4" ] attribute col { text }?
 attlist.group &= ( attribute name { text } | attribute id { text } )
 attlist.group &= attribute states { text }?
+attlist.group &= [ a:defaultValue = "0" ] attribute homogeneous { "0" | "1" }?
 
 hpaned = element hpaned { attlist.paned, child* }
 
@@ -259,10 +238,6 @@ xpath = element xpath { attlist.xpath,
     | hpaned
     | vpaned
     | form
-    | tree
-    | graph
-    | x
-    | y
     | page
     | child)*
   }

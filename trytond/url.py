@@ -8,30 +8,40 @@ import socket
 from trytond.config import CONFIG
 from trytond.transaction import Transaction
 
+__all__ = ['URLMixin']
 
-class URLMixin(object):
+HOSTNAME = (CONFIG['hostname_jsonrpc']
+    or unicode(socket.getfqdn(), 'utf8'))
+HOSTNAME = '.'.join(encodings.idna.ToASCII(part) if part else ''
+    for part in HOSTNAME.split('.'))
 
-    def get_url(self):
+
+class URLAccessor(object):
+
+    def __get__(self, inst, cls):
         from trytond.model import Model
         from trytond.wizard import Wizard
         from trytond.report import Report
 
-        hostname = CONFIG['hostname'] or unicode(socket.getfqdn(), 'utf8')
-        hostname = '.'.join(encodings.idna.ToASCII(part) for part in
-            hostname.split('.'))
-
         url_part = {}
-        if isinstance(self, Model):
+        if issubclass(cls, Model):
             url_part['type'] = 'model'
-        elif isinstance(self, Wizard):
+        elif issubclass(cls, Wizard):
             url_part['type'] = 'wizard'
-        elif isinstance(self, Report):
+        elif issubclass(cls, Report):
             url_part['type'] = 'report'
         else:
             raise NotImplementedError
 
-        url_part['name'] = self._name
+        url_part['name'] = cls.__name__
         url_part['database'] = Transaction().cursor.database_name
 
         local_part = urllib.quote('%(database)s/%(type)s/%(name)s' % url_part)
-        return 'tryton://%s/%s' % (hostname, local_part)
+        if isinstance(inst, Model) and inst.id:
+            local_part += '/%d' % inst.id
+        return 'tryton://%s/%s' % (HOSTNAME, local_part)
+
+
+class URLMixin(object):
+
+        __url__ = URLAccessor()
