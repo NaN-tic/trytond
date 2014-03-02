@@ -1,45 +1,22 @@
 <?xml version="1.0"?>
-<!-- This file is part of Tryton.  The COPYRIGHT file at the top level of this repository contains the full copyright notices and license terms. -->
+<!-- This file is part of Tryton.  The COPYRIGHT file at the top level of
+this repository contains the full copyright notices and license terms. -->
 <tryton>
     <data>
         <record model="ir.ui.view" id="attachment_view_form">
             <field name="model">ir.attachment</field>
             <field name="type">form</field>
-            <field name="arch" type="xml">
-              <![CDATA[
-                <form string="Attachments">
-                    <label name="name"/>
-                    <field name="name"/>
-                    <label name="res_model"/>
-                    <field name="res_model"/>
-                    <label name="res_id"/>
-                    <field name="res_id"/>
-                    <label name="datas"/>
-                    <field name="datas"/>
-                    <separator name="description" colspan="4"/>
-                    <field name="description" colspan="4"/>
-                </form>
-                ]]>
-            </field>
+            <field name="name">attachment_form</field>
         </record>
         <record model="ir.ui.view" id="attachment_view_tree">
             <field name="model">ir.attachment</field>
             <field name="type">tree</field>
-            <field name="arch" type="xml">
-              <![CDATA[
-                <tree string="Attachments">
-                    <field name="name" select="1"/>
-                    <field name="res_model" select="1"/>
-                    <field name="res_id"/>
-                </tree>
-                ]]>
-            </field>
+            <field name="name">attachment_list</field>
         </record>
         <record model="ir.action.act_window" id="act_attachment_form">
             <field name="name">Attachments</field>
             <field name="type">ir.action.act_window</field>
             <field name="res_model">ir.attachment</field>
-            <field name="view_type">form</field>
         </record>
         <record model="ir.action.act_window.view"
             id="act_attachment_form_view1">

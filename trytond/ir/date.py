@@ -1,23 +1,29 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level
 #of this repository contains the full copyright notices and license terms.
-from trytond.model import Model
 import datetime
+
+from ..model import Model
+from ..rpc import RPC
+
+__all__ = [
+    'Date',
+    ]
 
 
 class Date(Model):
     'Date'
-    _name = 'ir.date'
-    _description = __doc__
+    __name__ = 'ir.date'
 
-    def today(self, cursor, user, context=None):
+    @classmethod
+    def __setup__(cls):
+        super(Date, cls).__setup__()
+        cls.__rpc__.update({
+                'today': RPC(),
+                })
+
+    @staticmethod
+    def today(timezone=None):
         '''
-        Current date
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param context: the context
-        :return: a current datetime.date
+        Return the current date
         '''
-        return datetime.date.today()
-
-Date()
+        return datetime.datetime.now(timezone).date()

@@ -1,380 +1,369 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from trytond.model import Model
-from trytond.model import fields
-from trytond.model.browse import BrowseRecordList, BrowseRecord, BrowseRecordNull
-from trytond.model.browse import EvalEnvironment
+
 import datetime
 import time
-from decimal import Decimal
 import logging
+import traceback
+import sys
+import csv
+import warnings
+try:
+    import cStringIO as StringIO
+except ImportError:
+    import StringIO
 
-OPERATORS = (
-    'child_of',
-    'not child_of',
-    '=',
-    '!=',
-    'like',
-    'not like',
-    'ilike',
-    'not ilike',
-    'in',
-    'not in',
-    '<=',
-    '>=',
-    '<',
-    '>',
-)
+from decimal import Decimal
+from itertools import islice, ifilter, chain, izip
+from functools import reduce
+
+from trytond.model import Model
+from trytond.model import fields
+from trytond.tools import safe_eval, reduce_domain, memoize
+from trytond.pyson import PYSONEncoder, PYSONDecoder, PYSON
+from trytond.const import OPERATORS, RECORD_CACHE_SIZE, BROWSE_FIELD_TRESHOLD
+from trytond.transaction import Transaction
+from trytond.pool import Pool
+from trytond.cache import LRUDict
+from trytond.config import CONFIG
+from trytond.rpc import RPC
+from .modelview import ModelView
+
+__all__ = ['ModelStorage']
 
 
 class ModelStorage(Model):
     """
     Define a model with storage capability in Tryton.
-
-    :_rec_name: The name of the main field of the model.
-        By default the field ``name``.
-    :id: An Integer field for unique identifier.
-    :create_uid: A Many2One that points to the
-        user who created the record.
-    :create_date: A Date field for date of creation of the record.
-    :write_uid: A Many2One that points to the user who writed the record.
-    :write_date: A Date field for date of last write of the record.
-    :rec_name: A Function field that return the rec_name of the record.
-    :_constraints: A list of constraints that each record must respect.
-        Each item of this list is a couple ``('function_name', 'error_keyword')``,
-        where ``'function_name'`` is the name of a method of the same class,
-        which should return a boolean value (``False`` when the constraint is
-        violated). ``error_keyword`` must be one of the key of
-        ``_sql_error_messages``.
     """
-    _rec_name = 'name'
 
-    id = fields.Integer('ID', readonly=True)
     create_uid = fields.Many2One('res.user', 'Create User', readonly=True)
-    create_date = fields.DateTime('Create Date', readonly=True)
+    create_date = fields.Timestamp('Create Date', readonly=True)
     write_uid = fields.Many2One('res.user', 'Write User', readonly=True)
-    write_date = fields.DateTime('Write Date', readonly=True)
-    rec_name = fields.Function('get_rec_name', type='char', string='Name',
-            fnct_search='search_rec_name')
+    write_date = fields.Timestamp('Write Date', readonly=True)
+    rec_name = fields.Function(fields.Char('Name'), 'get_rec_name',
+            searcher='search_rec_name')
 
-    def __init__(self):
-        super(ModelStorage, self).__init__()
-        self._rpc.update({
-            'create': True,
-            'read': False,
-            'write': True,
-            'delete': True,
-            'copy': True,
-            'search': False,
-            'search_count': False,
-            'search_read': False,
-            'export_data': False,
-            'import_data': True,
-        })
-        self._constraints = []
+    @classmethod
+    def __setup__(cls):
+        super(ModelStorage, cls).__setup__()
+        if issubclass(cls, ModelView):
+            cls.__rpc__.update({
+                    'create': RPC(readonly=False,
+                        result=lambda r: map(int, r)),
+                    'read': RPC(),
+                    'write': RPC(readonly=False,
+                        instantiate=slice(0, None, 2)),
+                    'delete': RPC(readonly=False, instantiate=0),
+                    'copy': RPC(readonly=False, instantiate=0,
+                        result=lambda r: map(int, r)),
+                    'search': RPC(result=lambda r: map(int, r)),
+                    'search_count': RPC(),
+                    'search_read': RPC(),
+                    'export_data': RPC(instantiate=0),
+                    'import_data': RPC(readonly=False),
+                    })
+        cls._constraints = []
 
-    def default_create_uid(self, cursor, user, context=None):
-        "Default value for uid field"
-        return int(user)
+    @staticmethod
+    def default_create_uid():
+        "Default value for uid field."
+        return int(Transaction().user)
 
-    def default_create_date(self, cursor, user, context=None):
-        "Default value for create_date field"
+    @staticmethod
+    def default_create_date():
+        "Default value for create_date field."
         return datetime.datetime.today()
 
-    def default_sequence(self, cursor, user, context=None):
+    @classmethod
+    def create(cls, vlist):
         '''
-        Return the default value for sequence field.
+        Returns the list of created records.
         '''
-        table = self._table
-        if 'sequence' not in self._columns:
-            for model in self._inherits:
-                model_obj = self.pool.get(model)
-                if 'sequence' in model_obj._columns:
-                    table = model_obj._table
-                    break
-        cursor.execute('SELECT MAX(sequence) ' \
-                'FROM "' + table + '"')
-        res = cursor.fetchone()
-        if res:
-            return res[0]
-        return 0
+        pool = Pool()
+        ModelAccess = pool.get('ir.model.access')
+        ModelFieldAccess = pool.get('ir.model.field.access')
 
-    def create(self, cursor, user, values, context=None):
-        '''
-        Create records.
+        ModelAccess.check(cls.__name__, 'create')
 
-        :param cursor: the database cursor
-        :param user: the user id
-        :param values: a dictionary with fields names as key
-                and created values as value
-        :param context: the context
-        :return: the id of the created record
-        '''
-        model_access_obj = self.pool.get('ir.model.access')
-        model_access_obj.check(cursor, user, self._name, 'create',
-                context=context)
-        return False
+        all_fields = list(set(chain(*(v.iterkeys() for v in vlist))))
+        ModelFieldAccess.check(cls.__name__, all_fields, 'write')
 
-    def read(self, cursor, user, ids, fields_names=None, context=None):
-        '''
-        Read records.
+        # Increase transaction counter
+        Transaction().counter += 1
 
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids or an id
-        :param fields_names: fields names to read if None read all fields
-        :param context: the context
-        :return: a list of dictionnary or a dictionnary if ids is an id
-            the dictionnaries will have fields names as key
-            and fields value as value. The list will not be in the same order.
+    @classmethod
+    def trigger_create(cls, records):
         '''
-        model_access_obj = self.pool.get('ir.model.access')
+        Trigger create actions
+        '''
+        Trigger = Pool().get('ir.trigger')
+        triggers = Trigger.get_triggers(cls.__name__, 'create')
+        if not triggers:
+            return
+        for trigger in triggers:
+            triggers = []
+            for record in records:
+                if Trigger.eval(trigger, record):
+                    triggers.append(record)
+            if triggers:
+                Trigger.trigger_action(triggers, trigger)
 
-        model_access_obj.check(cursor, user, self._name, 'read',
-                context=context)
-        if isinstance(ids, (int, long)):
-            return {}
+    @classmethod
+    def read(cls, ids, fields_names=None):
+        '''
+        Read fields_names of record ids.
+        If fields_names is None, it read all fields.
+        The order is not guaranteed.
+        '''
+        pool = Pool()
+        ModelAccess = pool.get('ir.model.access')
+        ModelFieldAccess = pool.get('ir.model.field.access')
+
+        ModelAccess.check(cls.__name__, 'read')
+        ModelFieldAccess.check(cls.__name__,
+                fields_names or cls._fields.keys(), 'read')
         return []
 
-    def write(self, cursor, user, ids, values, context=None):
+    @classmethod
+    def write(cls, records, values, *args):
         '''
-        Write values on records
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids or an id
-        :param values: a dictionary with fields names as key
-                and written values as value
-        :param context: the context
-        :return: True if succeed
+        Write values on records.
         '''
-        model_access_obj = self.pool.get('ir.model.access')
-        rule_group_obj = self.pool.get('ir.rule.group')
-        rule_obj = self.pool.get('ir.rule')
+        pool = Pool()
+        ModelAccess = pool.get('ir.model.access')
+        ModelFieldAccess = pool.get('ir.model.field.access')
 
-        model_access_obj.check(cursor, user, self._name, 'write',
-                context=context)
-        if not self.check_xml_record(cursor, user, ids, values,
-                context=context):
-            self.raise_user_error(cursor, 'write_xml_record',
-                                  error_description='xml_record_desc',
-                                  context=context)
-        return False
+        ModelAccess.check(cls.__name__, 'write')
+        ModelFieldAccess.check(cls.__name__,
+            [x for x in values if x in cls._fields], 'write')
 
-    def delete(self, cursor, user, ids, context=None):
+        assert not len(args) % 2
+        actions = iter((records, values) + args)
+        all_records = []
+        for records, values in zip(actions, actions):
+            if not cls.check_xml_record(records, values):
+                cls.raise_user_error('write_xml_record',
+                        error_description='xml_record_desc')
+            all_records += records
+
+        # Increase transaction counter
+        Transaction().counter += 1
+
+        # Clean local cache
+        for record in all_records:
+            local_cache = record._local_cache.get(record.id)
+            if local_cache:
+                local_cache.clear()
+
+        # Clean cursor cache
+        for cache in Transaction().cursor.cache.itervalues():
+            if cls.__name__ in cache:
+                for record in all_records:
+                    if record.id in cache[cls.__name__]:
+                        cache[cls.__name__][record.id].clear()
+
+    @classmethod
+    def trigger_write_get_eligibles(cls, records):
+        '''
+        Return eligible records for write actions by triggers
+        '''
+        Trigger = Pool().get('ir.trigger')
+        triggers = Trigger.get_triggers(cls.__name__, 'write')
+        if not triggers:
+            return {}
+        eligibles = {}
+        for trigger in triggers:
+            eligibles[trigger] = []
+            for record in records:
+                if not Trigger.eval(trigger, record):
+                    eligibles[trigger].append(record)
+        return eligibles
+
+    @classmethod
+    def trigger_write(cls, eligibles):
+        '''
+        Trigger write actions.
+        eligibles is a dictionary of the lists of eligible records by triggers
+        '''
+        Trigger = Pool().get('ir.trigger')
+        for trigger, records in eligibles.iteritems():
+            triggered = []
+            for record in records:
+                if Trigger.eval(trigger, record):
+                    triggered.append(record)
+            if triggered:
+                Trigger.trigger_action(triggered, trigger)
+
+    @classmethod
+    def delete(cls, records):
         '''
         Delete records.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids or an id
-        :param context: the context
-        :return: True if succeed
         '''
-        model_access_obj = self.pool.get('ir.model.access')
+        ModelAccess = Pool().get('ir.model.access')
 
-        model_access_obj.check(cursor, user, self._name, 'delete',
-                context=context)
-        if not self.check_xml_record(cursor, user, ids, None, context=context):
-            self.raise_user_error(cursor, 'delete_xml_record',
-                                  error_description='xml_record_desc',
-                                  context=context)
-        return False
+        ModelAccess.check(cls.__name__, 'delete')
+        if not cls.check_xml_record(records, None):
+            cls.raise_user_error('delete_xml_record',
+                    error_description='xml_record_desc')
 
-    def copy(self, cursor, user, ids, default=None, context=None):
+        # Increase transaction counter
+        Transaction().counter += 1
+
+        # Clean cursor cache
+        for cache in Transaction().cursor.cache.values():
+            for cache in (cache, cache.get('_language_cache', {}).values()):
+                if cls.__name__ in cache:
+                    for record in records:
+                        if record.id in cache[cls.__name__]:
+                            del cache[cls.__name__][record.id]
+
+    @classmethod
+    def trigger_delete(cls, records):
         '''
-        Duplicate the record in ids.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids or an id
-        :param default: a dictionnary with field name as keys and
-            new value for the field as value
-        :param context: the context
-        :return: a list of new ids or the new id
+        Trigger delete actions
         '''
-        lang_obj = self.pool.get('ir.lang')
+        Trigger = Pool().get('ir.trigger')
+        triggers = Trigger.get_triggers(cls.__name__, 'delete')
+        if not triggers:
+            return
+        for trigger in triggers:
+            triggered = []
+            for record in records:
+                if Trigger.eval(trigger, record):
+                    triggered.append(record)
+            if triggered:
+                Trigger.trigger_action(triggered, trigger)
+
+    @classmethod
+    def copy(cls, records, default=None):
+        '''
+        Duplicate the records and return a list of new records.
+        '''
+        pool = Pool()
+        Lang = pool.get('ir.lang')
         if default is None:
             default = {}
-        if context is None:
-            context = {}
-
-        int_id = False
-        if isinstance(ids, (int, long)):
-            int_id = True
-            ids = [ids]
 
         if 'state' not in default:
-            if 'state' in self._defaults:
-                default['state'] = self._defaults['state'](cursor, user,
-                        context)
+            if 'state' in cls._defaults:
+                default['state'] = cls._defaults['state']()
 
-        def convert_data(fields, data):
+        def convert_data(field_defs, data):
             data = data.copy()
-            data_o2m = {}
-            for field_name in fields:
-                ftype = fields[field_name]['type']
+            for field_name in field_defs:
+                ftype = field_defs[field_name]['type']
 
                 if field_name in (
-                    'create_date',
-                    'create_uid',
-                    'write_date',
-                    'write_uid',
-                    ):
+                        'create_date',
+                        'create_uid',
+                        'write_date',
+                        'write_uid',
+                        ):
                     del data[field_name]
 
                 if field_name in default:
                     data[field_name] = default[field_name]
-                elif ftype == 'function':
+                elif (isinstance(cls._fields[field_name], fields.Function)
+                        and not isinstance(cls._fields[field_name],
+                            fields.Property)):
                     del data[field_name]
-                elif ftype == 'many2one':
+                elif ftype in ('many2one', 'one2one'):
                     try:
                         data[field_name] = data[field_name] and \
-                                data[field_name][0]
-                    except:
+                            data[field_name][0]
+                    except Exception:
                         pass
                 elif ftype in ('one2many',):
                     if data[field_name]:
-                        data_o2m[field_name] = data[field_name]
-                    data[field_name] = False
+                        data[field_name] = [('copy', data[field_name])]
                 elif ftype == 'many2many':
                     if data[field_name]:
-                        data[field_name] = [('set', data[field_name])]
+                        data[field_name] = [('add', data[field_name])]
             if 'id' in data:
                 del data['id']
-            return data, data_o2m
+            return data
 
-        new_ids = {}
-        fields_names = self._columns.keys()
-        datas = self.read(cursor, user, ids, fields_names=fields_names,
-                context=context)
-        fields = self.fields_get(cursor, user, fields_names=fields_names,
-                context=context)
+        fields_names = [n for n, f in cls._fields.iteritems()
+            if (not isinstance(f, fields.Function)
+                or isinstance(f, fields.Property))]
+        ids = map(int, records)
+        datas = cls.read(ids, fields_names=fields_names)
+        field_defs = cls.fields_get(fields_names=fields_names)
+        to_create = []
         for data in datas:
-            data_id = data['id']
-            data, data_o2m = convert_data(fields, data)
-            new_ids[data_id] = self.create(cursor, user, data, context=context)
-            for field_name in data_o2m:
-                relation_model = self.pool.get(fields[field_name]['relation'])
-                if 'relation_field' in fields[field_name]:
-                    relation_field = fields[field_name]['relation_field']
-                    relation_model.copy(cursor, user, data_o2m[field_name],
-                            default={relation_field: new_ids[data_id]},
-                            context=context)
+            data = convert_data(field_defs, data)
+            to_create.append(data)
+        new_records = cls.create(to_create)
+        new_ids = dict(izip(ids, map(int, new_records)))
 
         fields_translate = {}
-        for field_name, field in fields.iteritems():
-            if field_name in self._columns and \
-                    self._columns[field_name].translate:
+        for field_name, field in field_defs.iteritems():
+            if field_name in cls._fields and \
+                    getattr(cls._fields[field_name], 'translate', False):
                 fields_translate[field_name] = field
 
         if fields_translate:
-            lang_ids = lang_obj.search(cursor, user, [
+            langs = Lang.search([
                 ('translatable', '=', True),
-                ], context=context)
-            if lang_ids:
-                lang_ids += lang_obj.search(cursor, user, [
-                    ('code', '=', 'en_US'),
-                    ], context=context)
-                langs = lang_obj.browse(cursor, user, lang_ids, context=context)
+                ])
+            if langs:
                 for lang in langs:
-                    ctx = context.copy()
-                    ctx['language'] = lang.code
-                    datas = self.read(cursor, user, ids,
-                            fields_names=fields_translate.keys() + ['id'],
-                            context=ctx)
-                    for data in datas:
-                        data_id = data['id']
-                        data, _ = convert_data(fields_translate, data)
-                        self.write(cursor, user, new_ids[data_id], data, context=ctx)
-        if int_id:
-            return new_ids.values()[0]
-        return new_ids.values()
+                    # Prevent fuzzing translations when copying as the terms
+                    # should be the same.
+                    with Transaction().set_context(language=lang.code,
+                            fuzzy_translation=False):
+                        datas = cls.read(ids,
+                                fields_names=fields_translate.keys() + ['id'])
+                        for data in datas:
+                            data_id = data['id']
+                            data = convert_data(fields_translate, data)
+                            cls.write([cls(new_ids[data_id])], data)
+        return cls.browse(new_ids.values())
 
-    def search(self, cursor, user, domain, offset=0, limit=None, order=None,
-            context=None, count=False):
+    @classmethod
+    def search(cls, domain, offset=0, limit=None, order=None, count=False):
         '''
-        Return a list of id that match the clauses defined in args.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param domain: a list of tuples or lists
-            lists are construct like this:
-            ``['operator', args, args, ...]``
-            operator can be 'AND' or 'OR', if it is missing the default
-            value will be 'AND'
-            tuples are construct like this:
-            ``('field name', 'operator', value)``
-            field name: is a field name from the model or a relational field
-            by using '.' as separator.
-            operator must be in OPERATORS
-        :param offset: an integer to specify the offset for the result
-        :param limit: an integer to specify the number of result
-        :param order: a list of tuple that are constructed like this:
-            ``('field name', 'DESC|ASC')``
-            it allow to specify the order of result
-        :param context: the context
-        :param count: a boolean to return only the len of the result
-        :return: a list of ids or an interger
+        Return a list of records that match the domain.
         '''
         if count:
             return 0
         return []
 
-    def search_count(self, cursor, user, domain, context=None):
+    @classmethod
+    def search_count(cls, domain):
         '''
-        Return the number of record that match the domain. (See search)
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param domain: a domain like in search
-        :param context: the context
-        :return: an integer
+        Return the number of records that match the domain.
         '''
-        res = self.search(cursor, user, domain, context=context, count=True)
+        res = cls.search(domain, count=True)
         if isinstance(res, list):
             return len(res)
         return res
 
-    def search_read(self, cursor, user, domain, offset=0, limit=None, order=None,
-            context=None, fields_names=None):
+    @classmethod
+    def search_read(cls, domain, offset=0, limit=None, order=None,
+            fields_names=None):
         '''
-        Call search function and read in once.
-        Usefull for the client to reduce the number of calls.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param domain: a domain like in search
-        :param offset: an integer to specify the offset for the result
-        :param limit: an integer to specify the number of result
-        :param order: a list of tuple that are constructed like this:
-            ('field name', 'DESC|ASC')
-            it allow to specify the order of result
-        :param context: the context
-        :param fields_names: fields names to read if None read all fields
-        :return: a list of dictionnary or a dictionnary if limit is 1
-            the dictionnaries will have fields names as key
-            and fields value as value
+        Call search and read functions at once.
+        Useful for the client to reduce the number of calls.
         '''
-        ids = self.search(cursor, user, domain, offset=offset, limit=limit,
-                order=order, context=context)
-        if limit == 1:
-            if not ids:
-                return []
-            ids = ids[0]
-        return self.read(cursor, user, ids, fields_names=fields_names,
-                context=context)
+        records = cls.search(domain, offset=offset, limit=limit, order=order)
 
-    def _search_domain_active(self, domain, active_test=True, context=None):
-        if context is None:
-            context = {}
+        if not fields_names:
+            fields_names = cls._fields.keys()
+        if 'id' not in fields_names:
+            fields_names.append('id')
+        return cls.read(map(int, records), fields_names)
 
-        domain = domain[:]
+    @classmethod
+    def _search_domain_active(cls, domain, active_test=True):
+        # reduce_domain return a new instance so we can safety modify domain
+        domain = reduce_domain(domain)
         # if the object has a field named 'active', filter out all inactive
         # records unless they were explicitely asked for
-        if not (('active' in self._columns or \
-                'active' in self._inherit_fields.keys()) \
-                and (active_test and context.get('active_test', True))):
+        if not ('active' in cls._fields
+                and active_test
+                and Transaction().context.get('active_test', True)):
             return domain
 
         def process(domain):
@@ -383,582 +372,1107 @@ class ModelStorage(Model):
             while i < len(domain):
                 arg = domain[i]
                 #add test for xmlrpc that doesn't handle tuple
-                if isinstance(arg, tuple) or \
-                        (isinstance(arg, list) and len(arg) > 2 and \
-                        arg[1] in OPERATORS):
+                if (isinstance(arg, tuple)
+                        or (isinstance(arg, list)
+                            and len(arg) > 2
+                            and arg[1] in OPERATORS)):
                     if arg[0] == 'active':
                         active_found = True
                 elif isinstance(arg, list):
                     domain[i] = process(domain[i])
                 i += 1
             if not active_found:
-                if domain and ((isinstance(domain[0], basestring) \
-                        and domain[0] == 'AND') \
-                        or (not isinstance(domain[0], basestring))):
-                    domain.append(('active', '=', 1))
+                if (domain and ((isinstance(domain[0], basestring)
+                                and domain[0] == 'AND')
+                            or (not isinstance(domain[0], basestring)))):
+                    domain.append(('active', '=', True))
                 else:
-                    domain = ['AND', domain, ('active', '=', 1)]
+                    domain = ['AND', domain, ('active', '=', True)]
             return domain
         return process(domain)
 
-    def get_rec_name(self, cursor, user, ids, name, arg, context=None):
+    def get_rec_name(self, name):
         '''
-        Return a dictionary with id as key and rec_name as value.
-        It is used by the Function field rec_name
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids
-        :param name: the name of the Function field
-        :param arg: the argument of the Function field
-        :param context: the context
-        :return: a dictionary
+        Return the rec_name of the instance.
+        It is used by the Function field rec_name.
         '''
-        if not ids:
-            return {}
-        res = {}
         rec_name = self._rec_name
-        if rec_name not in self._columns \
-                and rec_name not in self._inherit_fields.keys():
+        if rec_name not in self._fields:
             rec_name = 'id'
-        for record in self.browse(cursor, user, ids, context=context):
-            res[record.id] = unicode(record[rec_name])
-        return res
+        return unicode(getattr(self, rec_name))
 
-    def search_rec_name(self, cursor, user, name, args, context=None):
+    @classmethod
+    def search_rec_name(cls, name, clause):
         '''
-        Return a list of arguments for search on rec_name
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param name: the name of the Function field
-        :param args: the list of arguments
-        :param context: the context
-        :return: a list of arguments
+        Return a list of arguments for search on rec_name.
         '''
-        args2 = []
-        i = 0
-        while i < len(args):
-            args2.append((self._rec_name, args[i][1], args[i][2]))
-            i += 1
-        return args2
+        rec_name = cls._rec_name
+        if rec_name not in cls._fields:
+            return []
+        return [(rec_name,) + tuple(clause[1:])]
 
-    def browse(self, cursor, user, ids, context=None):
+    @classmethod
+    def search_global(cls, text):
         '''
-        Return a browse a BrowseRecordList for the ids
-            or BrowseRecord if ids is a integer.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids or an id
-        :param context: the context
-        :return: a BrowseRecordList or a BrowseRecord
+        Yield tuples (id, rec_name, icon) for text
         '''
-        cache = {}
-        if isinstance(ids, (int, long)):
-            return BrowseRecord(cursor, user, ids, self, cache,
-                    context=context)
-        return BrowseRecordList([BrowseRecord(cursor, user, x, self, cache,
-            context=context) for x in ids], context)
+        # TODO improve search clause
+        for record in cls.search([
+                    ('rec_name', 'ilike', '%%%s%%' % text),
+                    ]):
+            yield record.id, record.rec_name, None
 
-    def __export_row(self, cursor, user, row, fields_names, context=None):
+    @classmethod
+    def browse(cls, ids):
+        '''
+        Return a list of instance for the ids
+        '''
+        ids = map(int, ids)
+        local_cache = LRUDict(RECORD_CACHE_SIZE)
+        return [cls(int(x), _ids=ids, _local_cache=local_cache) for x in ids]
+
+    @staticmethod
+    def __export_row(record, fields_names):
+        pool = Pool()
         lines = []
         data = ['' for x in range(len(fields_names))]
         done = []
         for fpos in range(len(fields_names)):
-            field = fields_names[fpos]
-            if field:
-                row2 = row
-                i = 0
-                while i < len(field):
-                    row2 = row2[field[i]]
-                    if not row2:
+            fields_tree = fields_names[fpos]
+            if not fields_tree:
+                continue
+            value = record
+            i = 0
+            while i < len(fields_tree):
+                if not isinstance(value, ModelStorage):
+                    break
+                field_name = fields_tree[i]
+                eModel = pool.get(value.__name__)
+                field = eModel._fields[field_name]
+                if field.states and 'invisible' in field.states:
+                    pyson_invisible = PYSONEncoder().encode(
+                            field.states['invisible'])
+                    env = EvalEnvironment(value, eModel)
+                    env.update(Transaction().context)
+                    env['current_date'] = datetime.datetime.today()
+                    env['time'] = time
+                    env['context'] = Transaction().context
+                    env['active_id'] = value.id
+                    invisible = PYSONDecoder(env).decode(pyson_invisible)
+                    if invisible:
+                        value = ''
                         break
-                    if isinstance(row2, (BrowseRecordList, list)):
-                        first = True
-                        fields2 = [(x[:i+1]==field[:i+1] and x[i+1:]) \
-                                or [] for x in fields_names]
-                        if fields2 in done:
-                            break
-                        done.append(fields2)
-                        for row2 in row2:
-                            lines2 = self.__export_row(cursor, user, row2,
-                                    fields2, context)
-                            if first:
-                                for fpos2 in range(len(fields_names)):
-                                    if lines2 and lines2[0][fpos2]:
-                                        data[fpos2] = lines2[0][fpos2]
-                                lines += lines2[1:]
-                                first = False
-                            else:
-                                lines += lines2
+                value = getattr(value, field_name)
+                if isinstance(value, (list, tuple)):
+                    first = True
+                    child_fields_names = [(x[:i + 1] == fields_tree[:i + 1] and
+                        x[i + 1:]) or [] for x in fields_names]
+                    if child_fields_names in done:
                         break
-                    i += 1
-                if i == len(field):
-                    data[fpos] = row2 or ''
+                    done.append(child_fields_names)
+                    for child_record in value:
+                        child_lines = ModelStorage.__export_row(child_record,
+                                child_fields_names)
+                        if first:
+                            for child_fpos in xrange(len(fields_names)):
+                                if child_lines and child_lines[0][child_fpos]:
+                                    data[child_fpos] = \
+                                        child_lines[0][child_fpos]
+                            lines += child_lines[1:]
+                            first = False
+                        else:
+                            lines += child_lines
+                    break
+                i += 1
+            if i == len(fields_tree):
+                if value is None:
+                    value = ''
+                elif isinstance(value, Model):
+                    value = str(value)
+                data[fpos] = value
         return [data] + lines
 
-    def export_data(self, cursor, user, ids, fields_names, context=None):
+    @classmethod
+    def export_data(cls, records, fields_names):
         '''
-        Return list of list of values for each ids.
-        The list of values follow the fields_names.
-        Relational fields are defined with '/' at any deep.
-
-        :param cursor: the database cursor
-        :param ids: a list of ids
-        :param fields_names: a list of fields names
-        :param context: the context
-        :return: a list of list of values for each ids
+        Return list of list of values for each record.
+        The list of values follows fields_names.
+        Relational fields are defined with '/' at any depth.
         '''
         fields_names = [x.split('/') for x in fields_names]
-        datas = []
-        for row in self.browse(cursor, user, ids, context):
-            datas += self.__export_row(cursor, user, row, fields_names, context)
-        return datas
+        data = []
+        for record in records:
+            data += cls.__export_row(record, fields_names)
+        return data
 
-    def import_data(self, cursor, user, fields_names, datas, context=None):
+    @classmethod
+    def import_data(cls, fields_names, data):
         '''
-        Create record for each values in datas.
-        The fields name of values must be defined in fields_names.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param fields_names: a list of fields names
-        :param datas: the datas to import
-        :param context: the context
-        :return: a tuple with
+        Create records for all values in data.
+        The field names of values must be defined in fields_names.
+        It returns a tuple with
             - the number of records imported
             - the last values if failed
             - the exception if failed
             - the warning if failed
         '''
-        if context is None:
-            context = {}
-        fields_names = [x.split('/') for x in fields_names]
-        logger = logging.getLogger('import')
+        pool = Pool()
 
-        def process_liness(self, datas, prefix, fields_def, position=0):
-            line = datas[position]
+        def warn(msgname, *args):
+            msg = cls.raise_user_error(msgname, args,
+                    raise_exception=False)
+            logger.warn(msg)
+
+        def get_selection(selection, value, field):
+            res = None
+            if not isinstance(selection, (tuple, list)):
+                selection = getattr(cls, selection)()
+            for key, _ in selection:
+                if str(key) == value:
+                    res = key
+                    break
+            if value and not res:
+                warn('not_found_in_selection', value, '/'.join(field))
+            return res
+
+        @memoize(1000)
+        def get_many2one(relation, value):
+            if not value:
+                return None
+            Relation = pool.get(relation)
+            res = Relation.search([
+                ('rec_name', '=', value),
+                ], limit=2)
+            if len(res) < 1:
+                warn('relation_not_found', value, relation)
+                res = None
+            elif len(res) > 1:
+                warn('too_many_relations_found', value, relation)
+                res = None
+            else:
+                res = res[0].id
+            return res
+
+        @memoize(1000)
+        def get_many2many(relation, value):
+            if not value:
+                return None
+            res = []
+            Relation = pool.get(relation)
+            for word in csv.reader(StringIO.StringIO(value), delimiter=',',
+                    quoting=csv.QUOTE_NONE, escapechar='\\').next():
+                res2 = Relation.search([
+                    ('rec_name', '=', word),
+                    ], limit=2)
+                if len(res2) < 1:
+                    warn('relation_not_found', word, relation)
+                elif len(res2) > 1:
+                    warn('too_many_relations_found', word, relation)
+                else:
+                    res.extend(res2)
+            if len(res):
+                res = [('add', [x.id for x in res])]
+            return res
+
+        def get_one2one(relation, value):
+            return ('add', get_many2one(relation, value))
+
+        @memoize(1000)
+        def get_reference(value, field):
+            if not value:
+                return None
+            try:
+                relation, value = value.split(',', 1)
+            except Exception:
+                warn('reference_syntax_error', value, '/'.join(field))
+                return None
+            Relation = pool.get(relation)
+            res = Relation.search([
+                ('rec_name', '=', value),
+                ], limit=2)
+            if len(res) < 1:
+                warn('relation_not_found', value, relation)
+                res = None
+            elif len(res) > 1:
+                warn('too_many_relations_found', value, relation)
+                res = None
+            else:
+                res = '%s,%s' % (relation, res[0].id)
+            return res
+
+        @memoize(1000)
+        def get_by_id(value, field):
+            if not value:
+                return None
+            relation = None
+            ftype = fields_def[field[-1][:-3]]['type']
+            if ftype == 'many2many':
+                value = csv.reader(StringIO.StringIO(value), delimiter=',',
+                        quoting=csv.QUOTE_NONE, escapechar='\\').next()
+            elif ftype == 'reference':
+                try:
+                    relation, value = value.split(',', 1)
+                except Exception:
+                    warn('reference_syntax_error', value, '/'.join(field))
+                    return None
+                value = [value]
+            else:
+                value = [value]
+            res_ids = []
+            for word in value:
+                try:
+                    module, xml_id = word.rsplit('.', 1)
+                except Exception:
+                    warn('xml_id_syntax_error', word, '/'.join(field))
+                    continue
+                db_id = ModelData.get_id(module, xml_id)
+                res_ids.append(db_id)
+            if ftype == 'many2many' and res_ids:
+                return [('add', res_ids)]
+            elif ftype == 'reference' and res_ids:
+                return '%s,%s' % (relation, str(res_ids[0]))
+            return res_ids and res_ids[0] or False
+
+        def process_lines(data, prefix, fields_def, position=0):
+            line = data[position]
             row = {}
             translate = {}
-            todo = []
-            warning = ''
-
+            todo = set()
+            prefix_len = len(prefix)
             # Import normal fields_names
-            for i in range(len(fields_names)):
+            for i, field in enumerate(fields_names):
                 if i >= len(line):
                     raise Exception('ImportError',
-                            'Please check that all your lines have %d cols.' % \
-                            (len(fields_names),))
-                field = fields_names[i]
-                if (len(field) == len(prefix) + 1) \
-                        and field[len(prefix)].endswith(':id'):
-                    res_id = False
-                    if line[i]:
-                        if fields_def[field[len(prefix)][:-3]]['type'] \
-                                == 'many2many':
-                            res_id = []
-                            for word in line[i].split(','):
-                                module, xml_id = word.rsplit('.', 1)
-                                ir_model_data_obj = \
-                                        self.pool.get('ir.model.data')
-                                new_id = ir_model_data_obj.get_id(cursor,
-                                        user, module, xml_id)
-                                res_id2 = ir_model_data_obj.read(cursor, user,
-                                        [new_id], ['res_id'])[0]['res_id']
-                                if res_id2:
-                                    res_id.append(res_id2)
-                            if len(res_id):
-                                res_id = [('set', res_id)]
+                        'Please check that all your lines have %d cols.'
+                        % len(fields_names))
+                is_prefix_len = (len(field) == (prefix_len + 1))
+                value = line[i]
+                if is_prefix_len and field[-1].endswith(':id'):
+                    row[field[0][:-3]] = get_by_id(value, field)
+                elif is_prefix_len and ':lang=' in field[-1]:
+                    field_name, lang = field[-1].split(':lang=')
+                    translate.setdefault(lang, {})[field_name] = value or False
+                elif is_prefix_len and prefix == field[:-1]:
+                    this_field_def = fields_def[field[-1]]
+                    field_type = this_field_def['type']
+                    res = None
+                    if field_type == 'boolean':
+                        if value.lower() == 'true':
+                            res = True
+                        elif value.lower() == 'false':
+                            res = False
+                        elif not value:
+                            res = False
                         else:
-                            module, xml_id = line[i].rsplit('.', 1)
-                            ir_model_data_obj = self.pool.get('ir.model.data')
-                            new_id = ir_model_data_obj.get_id(cursor, user,
-                                    module, xml_id)
-                            res_id = ir_model_data_obj.read(cursor, user,
-                                    [new_id], ['res_id'])[0]['res_id']
-                    row[field[0][:-3]] = res_id or False
-                    continue
-                if (len(field) == len(prefix)+1) and \
-                        len(field[len(prefix)].split(':lang=')) == 2:
-                    field, lang = field[len(prefix)].split(':lang=')
-                    translate.setdefault(lang, {})[field]=line[i] or False
-                    continue
-                if (len(field) == len(prefix)+1) and \
-                        (prefix == field[0:len(prefix)]):
-                    if fields_def[field[len(prefix)]]['type'] == 'integer':
-                        res = line[i] and int(line[i])
-                    elif fields_def[field[len(prefix)]]['type'] == 'float':
-                        res = line[i] and float(line[i])
-                    elif fields_def[field[len(prefix)]]['type'] == 'selection':
-                        res = False
-                        if isinstance(
-                                fields_def[field[len(prefix)]]['selection'],
-                                (tuple, list)):
-                            sel = fields_def[field[len(prefix)]]['selection']
-                        else:
-                            sel = getattr(self, fields_def[field[len(prefix)]]\
-                                    ['selection'])(cursor, user, context)
-                        for key, val in sel:
-                            if str(key) == line[i]:
-                                res = key
-                        if line[i] and not res:
-                            logger.warning("key '%s' not found " \
-                                               "in selection field '%s'" % \
-                                               (line[i], field[len(prefix)]))
-                    elif fields_def[field[len(prefix)]]['type'] == 'many2one':
-                        res = False
-                        if line[i]:
-                            relation = \
-                                    fields_def[field[len(prefix)]]['relation']
-                            relation_obj = self.pool.get(relation)
-                            res = relation_obj.search(cursor, user, [
-                                ('rec_name', '=', line[i]),
-                                ], limit=1, context=context)
-                            if not res:
-                                warning += ('Relation not found: ' + line[i] + \
-                                        ' on ' + relation + ' !\n')
-                                logger.warning(
-                                    'Relation not found: ' + line[i] + \
-                                        ' on ' + relation + ' !\n')
-                                res = False
-                            else:
-                                res = res[0]
-                    elif fields_def[field[len(prefix)]]['type'] == 'many2many':
-                        res = []
-                        if line[i]:
-                            relation = \
-                                    fields_def[field[len(prefix)]]['relation']
-                            for word in line[i].split(','):
-                                relation_obj = self.pool.get(relation)
-                                res2 = relation_obj.search(cursor, user, [
-                                    ('rec_name', '=', word),
-                                    ], limit=1, context=context)
-                                if not res2:
-                                    warning += ('Relation not found: ' + \
-                                            line[i] + ' on '+relation + ' !\n')
-                                    logger.warning(
-                                        'Relation not found: ' + line[i] + \
-                                                    ' on '+relation + ' !\n')
-                                else:
-                                    res.extend(res2)
-                            if len(res):
-                                res = [('set', res)]
+                            res = bool(int(value))
+                    elif field_type == 'integer':
+                        res = int(value) if value else None
+                    elif field_type == 'float':
+                        res = float(value) if value else None
+                    elif field_type == 'numeric':
+                        res = Decimal(value) if value else None
+                    elif field_type == 'date':
+                        res = (datetime.date(
+                                *time.strptime(value, '%Y-%m-%d')[:3])
+                            if value else None)
+                    elif field_type == 'datetime':
+                        res = (datetime.datetime(
+                                *time.strptime(value, '%Y-%m-%d %H:%M:%S')[:6])
+                            if value else None)
+                    elif field_type == 'selection':
+                        res = get_selection(this_field_def['selection'],
+                            value, field)
+                    elif field_type == 'many2one':
+                        res = get_many2one(this_field_def['relation'], value)
+                    elif field_type == 'many2many':
+                        res = get_many2many(this_field_def['relation'], value)
+                    elif field_type == 'one2one':
+                        res = get_one2one(this_field_def['relation'], value)
+                    elif field_type == 'reference':
+                        res = get_reference(value, field)
                     else:
-                        res = line[i] or False
-                    row[field[len(prefix)]] = res
-                elif (prefix==field[0:len(prefix)]):
-                    if field[0] not in todo:
-                        todo.append(field[len(prefix)])
-
+                        res = value or None
+                    row[field[-1]] = res
+                elif prefix == field[0:prefix_len]:
+                    todo.add(field[prefix_len])
             # Import one2many fields
             nbrmax = 1
             for field in todo:
-                newfd = self.pool.get(fields_def[field]['relation']).fields_get(
-                        cursor, user, context=context)
-                res = process_liness(self, datas, prefix + [field], newfd,
+                newfd = pool.get(fields_def[field]['relation']
+                        ).fields_get()
+                res = process_lines(data, prefix + [field], newfd,
                         position)
-                (newrow, max2, warning2, translate2) = res
+                (newrow, max2, _) = res
                 nbrmax = max(nbrmax, max2)
-                warning = warning + warning2
                 reduce(lambda x, y: x and y, newrow)
-                row[field] = (reduce(lambda x, y: x or y, newrow.values()) and \
-                        [('create', newrow)]) or []
+                row[field] = (reduce(lambda x, y: x or y, newrow.values()) and
+                         [('create', [newrow])]) or []
                 i = max2
-                while (position+i)<len(datas):
+                while (position + i) < len(data):
                     test = True
-                    for j in range(len(fields_names)):
-                        field2 = fields_names[j]
-                        if (len(field2) <= (len(prefix)+1)) \
-                                and datas[position+i][j]:
+                    for j, field2 in enumerate(fields_names):
+                        if (len(field2) <= (prefix_len + 1)
+                                and data[position + i][j]):
                             test = False
+                            break
                     if not test:
                         break
-
-                    (newrow, max2, warning2, translate2) = \
-                            process_liness(self, datas, prefix+[field], newfd,
-                                    position + i)
-                    warning = warning + warning2
+                    (newrow, max2, _) = \
+                        process_lines(data, prefix + [field], newfd,
+                            position + i)
                     if reduce(lambda x, y: x or y, newrow.values()):
-                        row[field].append(('create', newrow))
+                        row[field].append(('create', [newrow]))
                     i += max2
                     nbrmax = max(nbrmax, i)
+            if prefix_len == 0:
+                for i in xrange(max(nbrmax, 1)):
+                    data.pop(0)
+            return (row, nbrmax, translate)
 
-            if len(prefix) == 0:
-                for i in range(max(nbrmax, 1)):
-                    datas.pop(0)
-            result = (row, nbrmax, warning, translate)
-            return result
+        ModelData = pool.get('ir.model.data')
 
-        fields_def = self.fields_get(cursor, user, context=context)
+        # logger for collecting warnings for the client
+        logger = logging.Logger("import")
+        warning_stream = StringIO.StringIO()
+        logger.addHandler(logging.StreamHandler(warning_stream))
+
+        len_fields_names = len(fields_names)
+        assert all(len(x) == len_fields_names for x in data)
+        fields_names = [x.split('/') for x in fields_names]
+        fields_def = cls.fields_get()
         done = 0
 
-        while len(datas):
+        warning = ''
+        while len(data):
             res = {}
-            warning = ''
             try:
-                (res, other, warning, translate) = \
-                        process_liness(self, datas, [], fields_def)
+                (res, _, translate) = \
+                    process_lines(data, [], fields_def)
+                warning = warning_stream.getvalue()
                 if warning:
-                    cursor.rollback()
+                    # XXX should raise Exception
+                    Transaction().cursor.rollback()
                     return (-1, res, warning, '')
-                new_id = self.create(cursor, user, res, context=context)
+                new_id, = cls.create([res])
                 for lang in translate:
-                    context2 = context.copy()
-                    context2['language'] = lang
-                    self.write(cursor, user, new_id, translate[lang],
-                            context=context2)
+                    with Transaction().set_context(language=lang):
+                        cls.write(new_id, translate[lang])
             except Exception, exp:
+                logger = logging.getLogger('import')
                 logger.error(exp)
-                cursor.rollback()
-                return (-1, res, exp[1], warning)
+                # XXX should raise Exception
+                Transaction().cursor.rollback()
+                tb_s = ''.join(traceback.format_exception(*sys.exc_info()))
+                warning = '%s\n%s' % (tb_s, warning)
+                return (-1, res, exp, warning)
             done += 1
         return (done, 0, 0, 0)
 
-    def check_xml_record(self, cursor, user, ids, values, context=None):
+    @classmethod
+    def check_xml_record(cls, records, values):
         """
         Check if a list of records and their corresponding fields are
         originating from xml data. This is used by write and delete
         functions: if the return value is True the records can be
         written/deleted, False otherwise. The default behaviour is to
-        forbid all modification on records/fields originating from
+        forbid any modification on records/fields originating from
         xml. Values is the dictionary of written values. If values is
         equal to None, no field by field check is performed, False is
-        return has soon has one of the record comes from the xml.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids or an id
-        :param values: a dictionary with fields names as key and
-            written values as value
-        :param context: the context
-        :return: True or False
+        returned as soon as one of the record comes from the xml.
         """
-        model_data_obj = self.pool.get('ir.model.data')
+        ModelData = Pool().get('ir.model.data')
         # Allow root user to update/delete
-        if user == 0:
+        if Transaction().user == 0:
             return True
-        if isinstance(ids, (int, long)):
-            ids = [ids]
-        model_data_ids = model_data_obj.search(cursor, 0, [
-            ('model', '=', self._name),
-            ('db_id', 'in', ids),
-            ], context=context)
-        if not model_data_ids:
-            return True
-        if values == None:
-            return False
-        for line in model_data_obj.browse(cursor, 0, model_data_ids,
-                context=context):
-            if not line.values:
-                continue
-            xml_values = eval(line.values, {
-                'Decimal': Decimal,
-                'datetime': datetime,
-                })
-            for key, val in values.iteritems():
-                if key in xml_values and val != xml_values[key]:
-                    return False
+        with Transaction().set_user(0):
+            models_data = ModelData.search([
+                ('model', '=', cls.__name__),
+                ('db_id', 'in', map(int, records)),
+                ])
+            if not models_data:
+                return True
+            if values is None:
+                return False
+            for model_data in models_data:
+                if not model_data.values:
+                    continue
+                xml_values = safe_eval(model_data.values, {
+                    'Decimal': Decimal,
+                    'datetime': datetime,
+                    })
+                for key, val in values.iteritems():
+                    if key in xml_values and val != xml_values[key]:
+                        return False
         return True
 
-    def check_recursion(self, cursor, user, ids, parent='parent'):
+    @classmethod
+    def check_recursion(cls, records, parent='parent', rec_name='rec_name'):
         '''
-        Function that check if there is no recursion in the tree
+        Function that checks if there is no recursion in the tree
         composed with parent as parent field name.
-
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of ids
-        :param parent: the parent field name
-        :return: True or False
         '''
-        ids_parent = ids[:]
-        while len(ids_parent):
-            ids_parent2 = set()
-            for record in self.browse(cursor, user, ids_parent):
-                if record[parent].id:
-                    ids_parent2.add(record[parent].id)
-            ids_parent = list(ids_parent2)
-            for i in ids_parent:
-                if i in ids:
-                    return False
-        return True
+        parent_type = cls._fields[parent]._type
 
-    def _get_error_args(self, cursor, user, field_name, context=None):
-        model_field_obj = self.pool.get('ir.model.field')
-        error_args = (field_name, self._name)
-        if model_field_obj:
-            model_field_ids = model_field_obj.search(cursor,
-                    user, [
+        if parent_type not in ('many2one', 'many2many', 'one2one'):
+            raise Exception(
+                'Unsupported field type "%s" for field "%s" on "%s"'
+                % (parent_type, parent, cls.__name__))
+
+        visited = set()
+
+        for record in records:
+            walked = set()
+            walker = getattr(record, parent)
+            while walker:
+                if parent_type == 'many2many':
+                    for walk in walker:
+                        walked.add(walk.id)
+                        if walk.id == record.id:
+                            parent_rec_name = ', '.join(getattr(r, rec_name)
+                                for r in getattr(record, parent))
+                            cls.raise_user_error('recursion_error', {
+                                    'rec_name': getattr(record, rec_name),
+                                    'parent_rec_name': parent_rec_name,
+                                    })
+                    walker = list(chain(*(getattr(walk, parent)
+                                for walk in walker if walk.id not in visited)))
+                else:
+                    walked.add(walker.id)
+                    if walker.id == record.id:
+                        cls.raise_user_error('recursion_error', {
+                                'rec_name': getattr(record, rec_name),
+                                'parent_rec_name': getattr(getattr(record,
+                                        parent), rec_name)
+                                })
+                    walker = (getattr(walker, parent) not in visited
+                        and getattr(walker, parent))
+            visited.update(walked)
+
+    @classmethod
+    def _get_error_args(cls, field_name):
+        pool = Pool()
+        ModelField = pool.get('ir.model.field')
+        error_args = {
+            'field': field_name,
+            'model': cls.__name__
+            }
+        if ModelField:
+            model_fields = ModelField.search([
                         ('name', '=', field_name),
-                        ('model.model', '=', self._name),
-                        ], context=context, limit=1)
-            if model_field_ids:
-                model_field = model_field_obj.browse(cursor,
-                        user, model_field_ids[0],
-                        context=context)
-                error_args = (model_field.field_description,
-                        model_field.model.name)
+                        ('model.model', '=', cls.__name__),
+                        ], limit=1)
+            if model_fields:
+                model_field, = model_fields
+                error_args.update({
+                        'field': model_field.field_description,
+                        'model': model_field.model.name,
+                        })
         return error_args
 
+    @classmethod
+    def validate(cls, records):
+        pass
 
-    def _validate(self, cursor, user, ids, context=None):
-        if context is None:
-            context = {}
+    @classmethod
+    def _validate(cls, records, field_names=None):
+        pool = Pool()
+        # Ensure that records are readable
+        with Transaction().set_user(0, set_context=True):
+            records = cls.browse(records)
 
-        if user == 0 and context.get('user'):
-            ctx = context.copy()
-            del ctx['user']
-            return self._validate(cursor, context['user'], ids, context=ctx)
+        def call(name):
+            method = getattr(cls, name)
+            if not hasattr(method, 'im_self') or method.im_self:
+                return method(records)
+            else:
+                return all(method(r) for r in records)
+        for field in cls._constraints:
+            warnings.warn(
+                '_constraints is deprecated, override validate instead',
+                DeprecationWarning, stacklevel=2)
+            if not call(field[0]):
+                cls.raise_user_error(field[1])
 
-        context = context.copy()
-        field_error = []
-        field_err_str = []
-        for field in self._constraints:
-            if not getattr(self, field[0])(cursor, user, ids):
-                self.raise_user_error(cursor, field[1], context=context)
-
-        if not 'res.user' in self.pool.object_name_list() \
-                or user == 0:
+        if not 'res.user' in pool.object_name_list() \
+                or Transaction().user == 0:
             ctx_pref = {
             }
         else:
-            user_obj = self.pool.get('res.user')
-            ctx_pref = user_obj.get_preferences(cursor, user,
-                context_only=True, context=context)
+            User = pool.get('res.user')
+            ctx_pref = User.get_preferences(context_only=True)
 
-        context.update(ctx_pref)
-        records = self.browse(cursor, user, ids, context=context)
-        for field_name, field in self._columns.iteritems():
-            # validate domain
-            if field._type in ('many2one', 'many2many', 'one2many') \
-                    and field.domain:
-                if field._type in ('many2one', 'one2many'):
-                    relation_obj = self.pool.get(field.model_name)
-                else:
-                    relation_obj = field.get_target(self.pool)
-                if isinstance(field.domain, basestring):
-                    ctx = context.copy()
-                    ctx.update(ctx_pref)
-                    for record in records:
-                        env = EvalEnvironment(record, self)
-                        env.update(ctx)
-                        env['current_date'] = datetime.datetime.today()
-                        env['time'] = time
-                        env['context'] = context
-                        env['active_id'] = record.id
-                        domain = eval(field.domain, env)
-                        relation_ids = []
-                        if record[field_name]:
-                            if field._type in ('many2one',):
-                                relation_ids.append(record[field_name].id)
-                            else:
-                                relation_ids.extend(
-                                        [x.id for x in record[field_name]])
-                        if relation_ids and not relation_obj.search(cursor,
-                                user, [
-                                    'AND',
-                                    [('id', 'in', relation_ids)],
-                                    domain,
-                                    ], context=context):
-                            self.raise_user_error(cursor,
-                                    'domain_validation_record',
-                                    error_args=self._get_error_args(cursor,
-                                        user, field_name, context=context),
-                                    context=context)
-                else:
-                    relation_ids = []
-                    for record in records:
-                        if record[field_name]:
-                            if field._type in ('many2one',):
-                                relation_ids.append(record[field_name].id)
-                            else:
-                                relation_ids.extend(
-                                        [x.id for x in record[field_name]])
-                    if relation_ids:
-                        find_ids = relation_obj.search(cursor, user, [
-                            'AND',
-                            [('id', 'in', relation_ids)],
-                            field.domain,
-                            ], context=context)
-                        if not set(relation_ids) == set(find_ids):
-                            self.raise_user_error(cursor,
-                                    'domain_validation_record',
-                                    error_args=self._get_error_args(cursor,
-                                        user, field_name, context=context),
-                                    context=context)
-            # validate states required
-            if field.states and 'required' in field.states:
-                if isinstance(field.states['required'], basestring):
-                    ctx = context.copy()
-                    ctx.update(ctx_pref)
-                    for record in records:
-                        env = EvalEnvironment(record, self)
-                        env.update(ctx)
-                        env['current_date'] = datetime.datetime.today()
-                        env['time'] = time
-                        env['context'] = context
-                        env['active_id'] = record.id
-                        required = eval(field.states['required'], env)
-                        if required and not record[field_name]:
-                            self.raise_user_error(cursor,
-                                    'required_validation_record',
-                                    error_args=self._get_error_args(cursor,
-                                        user, field_name, context=context),
-                                    context=context)
-                else:
-                    if field.states['required']:
+        def is_pyson(test):
+            if isinstance(test, PYSON):
+                return True
+            if isinstance(test, (list, tuple)):
+                for i in test:
+                    if isinstance(i, PYSON):
+                        return True
+                    if isinstance(i, (list, tuple)):
+                        if is_pyson(i):
+                            return True
+            if isinstance(test, dict):
+                for key, value in test.items():
+                    if isinstance(value, PYSON):
+                        return True
+                    if isinstance(value, (list, tuple, dict)):
+                        if is_pyson(value):
+                            return True
+            return False
+
+        field_names = set(field_names or [])
+        ctx_pref['active_test'] = False
+        with Transaction().set_context(ctx_pref):
+            for field_name, field in cls._fields.iteritems():
+                if (field_names
+                        and field_name not in field_names
+                        and not (set(field.depends) & field_names)):
+                    continue
+                if isinstance(field, fields.Function) and \
+                        not field.setter:
+                    continue
+                # validate domain
+                if (field._type in
+                        ('many2one', 'many2many', 'one2many', 'one2one')
+                        and field.domain):
+                    if field._type in ('many2one', 'one2many'):
+                        Relation = pool.get(field.model_name)
+                    else:
+                        Relation = field.get_target()
+                    if is_pyson(field.domain):
+                        pyson_domain = PYSONEncoder().encode(field.domain)
                         for record in records:
-                            if not record[field_name]:
-                                self.raise_user_error(cursor,
-                                        'required_validation_record',
-                                        error_args=self._get_error_args(cursor,
-                                            user, field_name, context=context),
-                                        context=context)
+                            env = EvalEnvironment(record, cls)
+                            env.update(Transaction().context)
+                            env['current_date'] = datetime.datetime.today()
+                            env['time'] = time
+                            env['context'] = Transaction().context
+                            env['active_id'] = record.id
+                            domain = PYSONDecoder(env).decode(pyson_domain)
+                            relation_ids = []
+                            if getattr(record, field_name):
+                                if field._type in ('many2one', 'one2one'):
+                                    relation_ids.append(
+                                        getattr(record, field_name).id)
+                                else:
+                                    relation_ids.extend(
+                                        [x.id for x in getattr(record,
+                                                field_name)])
+                            if relation_ids and not Relation.search([
+                                        'AND',
+                                        [('id', 'in', relation_ids)],
+                                        domain,
+                                        ]):
+                                cls.raise_user_error(
+                                        'domain_validation_record',
+                                        error_args=cls._get_error_args(
+                                            field_name))
+                    else:
+                        relation_ids = []
+                        for record in records:
+                            if getattr(record, field_name):
+                                if field._type in ('many2one', 'one2one'):
+                                    relation_ids.append(
+                                        getattr(record, field_name).id)
+                                else:
+                                    relation_ids.extend(
+                                        [x.id for x in getattr(record,
+                                                field_name)])
+                        if relation_ids:
+                            finds = Relation.search([
+                                'AND',
+                                [('id', 'in', relation_ids)],
+                                field.domain,
+                                ])
+                            find_ids = map(int, finds)
+                            if not set(relation_ids) == set(find_ids):
+                                cls.raise_user_error(
+                                        'domain_validation_record',
+                                        error_args=cls._get_error_args(
+                                            field_name))
 
-    def _clean_defaults(self, defaults):
+                def required_test(value, field_name):
+                    if (isinstance(value, (type(None), type(False), list,
+                                    tuple, basestring, dict))
+                            and not value):
+                        cls.raise_user_error('required_validation_record',
+                            error_args=cls._get_error_args(field_name))
+                # validate states required
+                if field.states and 'required' in field.states:
+                    if is_pyson(field.states['required']):
+                        pyson_required = PYSONEncoder().encode(
+                                field.states['required'])
+                        for record in records:
+                            env = EvalEnvironment(record, cls)
+                            env.update(Transaction().context)
+                            env['current_date'] = datetime.datetime.today()
+                            env['time'] = time
+                            env['context'] = Transaction().context
+                            env['active_id'] = record.id
+                            required = PYSONDecoder(env).decode(pyson_required)
+                            if required:
+                                required_test(getattr(record, field_name),
+                                    field_name)
+                    else:
+                        if field.states['required']:
+                            for record in records:
+                                required_test(getattr(record, field_name),
+                                    field_name)
+                # validate required
+                if field.required:
+                    for record in records:
+                        required_test(getattr(record, field_name), field_name)
+                # validate size
+                if hasattr(field, 'size') and field.size is not None:
+                    for record in records:
+                        if isinstance(field.size, PYSON):
+                            pyson_size = PYSONEncoder().encode(field.size)
+                            env = EvalEnvironment(record, cls)
+                            env.update(Transaction().context)
+                            env['current_date'] = datetime.datetime.today()
+                            env['time'] = time
+                            env['context'] = Transaction().context
+                            env['active_id'] = record.id
+                            field_size = PYSONDecoder(env).decode(pyson_size)
+                        else:
+                            field_size = field.size
+                        size = len(getattr(record, field_name) or '')
+                        if (size > field_size >= 0):
+                            error_args = cls._get_error_args(field_name)
+                            error_args['size'] = size
+                            cls.raise_user_error('size_validation_record',
+                                error_args=error_args)
+
+                def digits_test(value, digits, field_name):
+                    def raise_user_error():
+                        error_args = cls._get_error_args(field_name)
+                        error_args['digits'] = digits[1]
+                        cls.raise_user_error('digits_validation_record',
+                            error_args=error_args)
+                    if value is None:
+                        return
+                    if isinstance(value, Decimal):
+                        if (value.quantize(Decimal(str(10.0 ** -digits[1])))
+                                != value):
+                            raise_user_error()
+                    elif CONFIG.options['db_type'] != 'mysql':
+                        if not (round(value, digits[1]) == float(value)):
+                            raise_user_error()
+                # validate digits
+                if hasattr(field, 'digits') and field.digits:
+                    if is_pyson(field.digits):
+                        pyson_digits = PYSONEncoder().encode(field.digits)
+                        for record in records:
+                            env = EvalEnvironment(record, cls)
+                            env.update(Transaction().context)
+                            env['current_date'] = datetime.datetime.today()
+                            env['time'] = time
+                            env['context'] = Transaction().context
+                            env['active_id'] = record.id
+                            digits = PYSONDecoder(env).decode(pyson_digits)
+                            digits_test(getattr(record, field_name), digits,
+                                field_name)
+                    else:
+                        for record in records:
+                            digits_test(getattr(record, field_name),
+                                field.digits, field_name)
+
+                # validate selection
+                if hasattr(field, 'selection') and field.selection:
+                    if isinstance(field.selection, (tuple, list)):
+                        test = set(dict(field.selection).keys())
+                    for record in records:
+                        value = getattr(record, field_name)
+                        if field._type == 'reference':
+                            if isinstance(value, ModelStorage):
+                                value = value.__class__.__name__
+                            elif value:
+                                value, _ = value.split(',')
+                        if not isinstance(field.selection, (tuple, list)):
+                            sel_func = getattr(cls, field.selection)
+                            if field.selection_change_with:
+                                test = sel_func(record)
+                            else:
+                                test = sel_func()
+                            test = set(dict(test))
+                        # None and '' are equivalent
+                        if '' in test or None in test:
+                            test.add('')
+                            test.add(None)
+                        if value not in test:
+                            error_args = cls._get_error_args(field_name)
+                            error_args['value'] = value
+                            cls.raise_user_error('selection_validation_record',
+                                error_args=error_args)
+
+                def format_test(value, format, field_name):
+                    if not value:
+                        return
+                    if not isinstance(value, datetime.time):
+                        value = value.time()
+                    if value != datetime.datetime.strptime(
+                            value.strftime(format), format).time():
+                        error_args = cls._get_error_args(field_name)
+                        error_args['value'] = value
+                        cls.raise_user_error('time_format_validation_record',
+                            error_args=error_args)
+
+                # validate time format
+                if (field._type in ('datetime', 'time')
+                        and field_name not in ('create_date', 'write_date')):
+                    if is_pyson(field.format):
+                        pyson_format = PYSONDecoder().encode(field.format)
+                        for record in records:
+                            env = EvalEnvironment(record, cls)
+                            env.update(Transaction().context)
+                            env['current_date'] = datetime.datetime.today()
+                            env['time'] = time
+                            env['context'] = Transaction().context
+                            env['active_id'] = record.id
+                            format = PYSONDecoder(env).decode(pyson_format)
+                            format_test(getattr(record, field_name), format,
+                                field_name)
+                    else:
+                        for record in records:
+                            format_test(getattr(record, field_name),
+                                field.format, field_name)
+
+        for record in records:
+            record.pre_validate()
+
+        cls.validate(records)
+
+    @classmethod
+    def _clean_defaults(cls, defaults):
+        pool = Pool()
         vals = {}
         for field in defaults.keys():
-            fld_def = (field in self._columns) and self._columns[field] \
-                    or self._inherit_fields[field][2]
-            if fld_def._type in ('many2one',):
+            fld_def = cls._fields[field]
+            if fld_def._type in ('many2one', 'one2one'):
                 if isinstance(defaults[field], (list, tuple)):
                     vals[field] = defaults[field][0]
                 else:
                     vals[field] = defaults[field]
             elif fld_def._type in ('one2many',):
-                obj = self.pool.get(fld_def.model_name)
+                obj = pool.get(fld_def.model_name)
                 vals[field] = []
                 for defaults2 in defaults[field]:
                     vals2 = obj._clean_defaults(defaults2)
-                    vals[field].append(('create', vals2))
+                    vals[field].append(('create', [vals2]))
             elif fld_def._type in ('many2many',):
-                vals[field] = [('set', defaults[field])]
+                vals[field] = [('add', defaults[field])]
             elif fld_def._type in ('boolean',):
                 vals[field] = bool(defaults[field])
             else:
                 vals[field] = defaults[field]
         return vals
 
-    def workflow_trigger_trigger(self, cursor, user, ids, context=None):
-        '''
-        Trigger trigger event
+    def __init__(self, id=None, **kwargs):
+        _ids = kwargs.pop('_ids', None)
+        _local_cache = kwargs.pop('_local_cache', None)
+        self._cursor = Transaction().cursor
+        self._user = Transaction().user
+        self._context = Transaction().context
+        if id is not None:
+            id = int(id)
+        if _ids is not None:
+            self._ids = _ids
+            assert id in _ids
+        else:
+            self._ids = [id]
 
-        :param cursor: the database cursor
-        :param user: the user id
-        :param ids: a list of id or an id
-        :param context: the context
-        '''
-        trigger_obj = self.pool.get('workflow.trigger')
-        instance_obj = self.pool.get('workflow.instance')
+        self._cursor_cache = self._cursor.get_cache(self._context)
 
-        if isinstance(ids, (int, long)):
-            ids = [ids]
+        if _local_cache is not None:
+            self._local_cache = _local_cache
+        else:
+            self._local_cache = LRUDict(RECORD_CACHE_SIZE)
+        self._local_cache.counter = Transaction().counter
 
-        trigger_ids = trigger_obj.search(cursor, 0, [
-            ('res_id', 'in', ids),
-            ('model', '=', self._name),
-            ], context=context)
-        for trigger in trigger_obj.browse(cursor, 0, trigger_ids,
-                context=context):
-            instance_obj.update(cursor, user, trigger.instance, context=context)
+        super(ModelStorage, self).__init__(id, **kwargs)
+
+    @property
+    def _cache(self):
+        cache = self._cursor_cache
+        if self.__name__ not in cache:
+            cache[self.__name__] = LRUDict(RECORD_CACHE_SIZE)
+        return cache[self.__name__]
+
+    def __getattr__(self, name):
+        try:
+            return super(ModelStorage, self).__getattr__(name)
+        except AttributeError:
+            if self.id < 0:
+                raise
+
+        counter = Transaction().counter
+        if self._local_cache.counter != counter:
+            self._local_cache.clear()
+            self._local_cache.counter = counter
+
+        # fetch the definition of the field
+        try:
+            field = self._fields[name]
+        except KeyError:
+            raise AttributeError('"%s" has no attribute "%s"' % (self, name))
+
+        try:
+            return self._local_cache[self.id][name]
+        except KeyError:
+            pass
+        try:
+            if field._type not in ('many2one', 'reference'):
+                return self._cache[self.id][name]
+        except KeyError:
+            pass
+
+        # build the list of fields we will fetch
+        ffields = {
+            name: field,
+            }
+        if field.loading == 'eager':
+            FieldAccess = Pool().get('ir.model.field.access')
+            fread_accesses = {}
+            fread_accesses.update(FieldAccess.check(self.__name__,
+                self._fields.keys(), 'read', access=True))
+            to_remove = set(x for x, y in fread_accesses.iteritems()
+                    if not y and x != name)
+
+            threshold = BROWSE_FIELD_TRESHOLD
+
+            def not_cached(item):
+                fname, field = item
+                return (fname not in self._cache.get(self.id, {})
+                    and fname not in self._local_cache.get(self.id, {}))
+
+            def to_load(item):
+                fname, field = item
+                return (field.loading == 'eager'
+                    and fname not in to_remove)
+
+            def overrided(item):
+                fname, field = item
+                return fname in self._fields
+
+            ifields = ifilter(to_load,
+                ifilter(not_cached,
+                    self._fields.iteritems()))
+            ifields = islice(ifields, 0, threshold)
+            ffields.update(ifields)
+
+        # add datetime_field
+        for field in ffields.values():
+            if hasattr(field, 'datetime_field') and field.datetime_field:
+                datetime_field = self._fields[field.datetime_field]
+                ffields[field.datetime_field] = datetime_field
+
+        def filter_(id_):
+            return (name not in self._cache.get(id_, {})
+                and name not in self._local_cache.get(id_, {}))
+
+        def unique(ids):
+            s = set()
+            for id_ in ids:
+                if id_ not in s:
+                    s.add(id_)
+                    yield id_
+        index = self._ids.index(self.id)
+        ids = chain(islice(self._ids, index, None),
+            islice(self._ids, 0, max(index - 1, 0)))
+        ids = islice(unique(ifilter(filter_, ids)), self._cursor.IN_MAX)
+
+        def instantiate(field, value, data):
+            if field._type in ('many2one', 'one2one', 'reference'):
+                if value is None or value is False:
+                    return None
+            elif field._type in ('one2many', 'many2many'):
+                if not value:
+                    return ()
+            try:
+                if field._type == 'reference':
+                    model_name, record_id = value.split(',')
+                    Model = Pool().get(model_name)
+                    try:
+                        value = int(record_id)
+                    except ValueError:
+                        return value
+                else:
+                    Model = field.get_target()
+            except KeyError:
+                return value
+            ctx = {}
+            datetime_ = None
+            if getattr(field, 'datetime_field', None):
+                datetime_ = data.get(field.datetime_field)
+                ctx = {'_datetime': datetime_}
+            with Transaction().set_context(**ctx):
+                local_cache = model2cache.setdefault((Model, datetime_),
+                    LRUDict(RECORD_CACHE_SIZE))
+                ids = model2ids.setdefault((Model, datetime_), [])
+                if field._type in ('many2one', 'one2one', 'reference'):
+                    ids.append(value)
+                    return Model(value, _ids=ids, _local_cache=local_cache)
+                elif field._type in ('one2many', 'many2many'):
+                    ids.extend(value)
+                    return tuple(Model(id, _ids=ids, _local_cache=local_cache)
+                        for id in value)
+
+        model2ids = {}
+        model2cache = {}
+        # Read the data
+        with Transaction().set_cursor(self._cursor), \
+                Transaction().set_user(self._user), \
+                Transaction().set_context(self._context):
+            if self.id in self._cache and name in self._cache[self.id]:
+                # Use values from cache
+                ids = islice(chain(islice(self._ids, index, None),
+                        islice(self._ids, 0, max(index - 1, 0))),
+                    self._cursor.IN_MAX)
+                ffields = {name: ffields[name]}
+                read_data = [{'id': i, name: self._cache[i][name]}
+                    for i in ids
+                    if i in self._cache and name in self._cache[i]]
+            else:
+                read_data = self.read(list(ids), ffields.keys())
+            # create browse records for 'remote' models
+            for data in read_data:
+                for fname, field in ffields.iteritems():
+                    fvalue = data[fname]
+                    if field._type in ('many2one', 'one2one', 'one2many',
+                            'many2many', 'reference'):
+                        fvalue = instantiate(field, data[fname], data)
+                    if data['id'] == self.id and fname == name:
+                        value = fvalue
+                    if (field._type not in ('many2one', 'one2one', 'one2many',
+                                'many2many', 'reference')
+                            and not isinstance(field, fields.Function)):
+                        continue
+                    if data['id'] not in self._local_cache:
+                        self._local_cache[data['id']] = {}
+                    self._local_cache[data['id']][fname] = fvalue
+                    if (field._type not in ('many2one', 'reference')
+                            or getattr(field, 'datetime_field', None)
+                            or isinstance(field, fields.Function)):
+                        del data[fname]
+                if data['id'] not in self._cache:
+                    self._cache[data['id']] = {}
+                self._cache[data['id']].update(data)
+        return value
+
+    @property
+    def _save_values(self):
+        values = {}
+        if not self._values:
+            return values
+        for fname, value in self._values.iteritems():
+            field = self._fields[fname]
+            if field._type in ('many2one', 'one2one', 'reference'):
+                if value:
+                    if value.id < 0 and field._type != 'reference':
+                        value.save()
+                    if field._type == 'reference':
+                        value = str(value)
+                    else:
+                        value = value.id
+            if field._type in ('one2many', 'many2many'):
+                targets = value
+                if self.id >= 0:
+                    _values, self._values = self._values, None
+                    try:
+                        to_remove = [t.id for t in getattr(self, fname)]
+                    finally:
+                        self._values = _values
+                else:
+                    to_remove = []
+                to_add = []
+                to_create = []
+                to_write = []
+                for target in targets:
+                    if target.id < 0:
+                        if field._type == 'one2many':
+                            # Don't store old target link
+                            setattr(target, field.field, None)
+                        to_create.append(target._save_values)
+                    else:
+                        if target.id in to_remove:
+                            to_remove.remove(target.id)
+                        else:
+                            to_add.append(target.id)
+                            target_values = target._save_values
+                            if target_values:
+                                to_write.append(
+                                    ('write', [target.id], target_values))
+                value = []
+                if to_remove:
+                    value.append(('remove', to_remove))
+                if to_add:
+                    value.append(('add', to_add))
+                if to_create:
+                    value.append(('create', to_create))
+                if to_write:
+                    value.extend(to_write)
+            values[fname] = value
+        return values
+
+    def save(self):
+        save_values = self._save_values
+        values = self._values
+        self._values = None
+        if save_values or self.id < 0:
+            try:
+                with Transaction().set_cursor(self._cursor), \
+                        Transaction().set_user(self._user), \
+                        Transaction().set_context(self._context):
+                    if self.id < 0:
+                        self._ids.remove(self.id)
+                        try:
+                            self.id = self.create([save_values])[0].id
+                        finally:
+                            self._ids.append(self.id)
+                    else:
+                        self.write([self], save_values)
+            except:
+                self._values = values
+                raise
+
+
+class EvalEnvironment(dict):
+
+    def __init__(self, record, Model):
+        super(EvalEnvironment, self).__init__()
+        self._record = record
+        self._model = Model
+
+    def __getitem__(self, item):
+        if item.startswith('_parent_'):
+            field = item[8:]
+            model_name = self._model._fields[field].model_name
+            ParentModel = Pool().get(model_name)
+            return EvalEnvironment(getattr(self._record, field), ParentModel)
+        if item in self._model._fields:
+            value = getattr(self._record, item)
+            if isinstance(value, Model):
+                if self._model._fields[item]._type == 'reference':
+                    return str(value)
+                return value.id
+            elif isinstance(value, (list, tuple)):
+                return [r.id for r in value]
+            else:
+                return value
+        return super(EvalEnvironment, self).__getitem__(item)
+
+    def __getattr__(self, item):
+        try:
+            return self.__getitem__(item)
+        except KeyError, exception:
+            raise AttributeError(*exception.args)
+
+    def get(self, item, default=None):
+        try:
+            return self.__getitem__(item)
+        except Exception:
+            pass
+        return super(EvalEnvironment, self).get(item, default)
+
+    def __nonzero__(self):
+        return bool(self._record)

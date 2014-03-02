@@ -1,7 +1,14 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-"UI menu"
 from trytond.model import ModelView, ModelSQL, fields
+from trytond.transaction import Transaction
+from trytond.pool import Pool
+from trytond.rpc import RPC
+
+__all__ = [
+    'UIMenu', 'UIMenuFavorite',
+    ]
+
 
 def one_in(i, j):
     """Check the presence of an element of setA in setB
@@ -11,200 +18,303 @@ def one_in(i, j):
             return True
     return False
 
-ICONS = [(x, x) for x in [
-    'tryton-accessories',
+CLIENT_ICONS = [(x, x) for x in (
+    'tryton-attachment-hi',
     'tryton-attachment',
+    'tryton-cancel',
     'tryton-clear',
     'tryton-close',
-    'tryton-calculator',
-    'tryton-calendar',
-    'tryton-clock',
     'tryton-connect',
     'tryton-copy',
-    'tryton-currency',
     'tryton-delete',
-    'tryton-development',
     'tryton-dialog-error',
     'tryton-dialog-information',
     'tryton-dialog-warning',
     'tryton-disconnect',
     'tryton-executable',
-    'tryton-find',
     'tryton-find-replace',
+    'tryton-find',
     'tryton-folder-new',
-    'tryton-folder-saved-search',
     'tryton-fullscreen',
-    'tryton-graph',
     'tryton-go-home',
     'tryton-go-jump',
     'tryton-go-next',
     'tryton-go-previous',
     'tryton-help',
-    'tryton-image-missing',
-    'tryton-information',
-    'tryton-lock',
-    'tryton-list',
+    'tryton-icon',
     'tryton-list-add',
     'tryton-list-remove',
     'tryton-locale',
+    'tryton-lock',
     'tryton-log-out',
     'tryton-mail-message-new',
+    'tryton-mail-message',
     'tryton-new',
-    'tryton-noimage',
+    'tryton-ok',
     'tryton-open',
-    'tryton-package',
-    'tryton-preferences',
-    'tryton-preferences-system',
     'tryton-preferences-system-session',
-    'tryton-presentation',
+    'tryton-preferences-system',
+    'tryton-preferences',
     'tryton-print',
-    'tryton-readonly',
     'tryton-refresh',
     'tryton-save-as',
     'tryton-save',
-    'tryton-spreadsheet',
     'tryton-start-here',
-    'tryton-tree',
-    'tryton-system',
     'tryton-system-file-manager',
-    'tryton-users',
-    'tryton-web-browser',
-]]
+    'tryton-system',
+    'tryton-undo',
+    'tryton-web-browser')]
+SEPARATOR = ' / '
 
 
 class UIMenu(ModelSQL, ModelView):
     "UI menu"
-    _name = 'ir.ui.menu'
-    _description = __doc__
+    __name__ = 'ir.ui.menu'
+
     name = fields.Char('Menu', required=True, translate=True)
-    sequence = fields.Integer('Sequence')
+    sequence = fields.Integer('Sequence', required=True)
     childs = fields.One2Many('ir.ui.menu', 'parent', 'Children')
-    parent = fields.Many2One('ir.ui.menu', 'Parent Menu', select=1)
+    parent = fields.Many2One('ir.ui.menu', 'Parent Menu', select=True,
+            ondelete='CASCADE')
     groups = fields.Many2Many('ir.ui.menu-res.group',
-       'menu_id', 'gid', 'Groups')
-    complete_name = fields.Function('get_full_name',
-       string='Complete Name', type='char', order_field='name')
-    icon = fields.Selection(ICONS, 'Icon', translate=False)
-    action = fields.Function('get_action', fnct_inv='action_inv',
-       type='reference', string='Action',
-       selection=[
-           ('ir.action.report', 'ir.action.report'),
-           ('ir.action.act_window', 'ir.action.act_window'),
-           ('ir.action.wizard', 'ir.action.wizard'),
-           ('ir.action.url', 'ir.action.url'),
-           ])
+       'menu', 'group', 'Groups')
+    complete_name = fields.Function(fields.Char('Complete Name'),
+        'get_rec_name', searcher='search_rec_name')
+    icon = fields.Selection('list_icons', 'Icon', translate=False)
+    action = fields.Function(fields.Reference('Action',
+            selection=[
+                ('', ''),
+                ('ir.action.report', 'ir.action.report'),
+                ('ir.action.act_window', 'ir.action.act_window'),
+                ('ir.action.wizard', 'ir.action.wizard'),
+                ('ir.action.url', 'ir.action.url'),
+                ]), 'get_action', setter='set_action')
     active = fields.Boolean('Active')
+    favorite = fields.Function(fields.Boolean('Favorite'), 'get_favorite')
 
-    def __init__(self):
-        super(UIMenu, self).__init__()
-        self._order.insert(0, ('sequence', 'ASC'))
+    @classmethod
+    def __setup__(cls):
+        super(UIMenu, cls).__setup__()
+        cls._order.insert(0, ('sequence', 'ASC'))
+        cls._error_messages.update({
+                'wrong_name': ('"%%s" is not a valid menu name because it is '
+                    'not allowed to contain "%s".' % SEPARATOR),
+                })
 
-    def default_icon(self, cursor, user, context=None):
+    @classmethod
+    def order_complet_name(cls, tables):
+        return cls.name.convert_order('name', tables, cls)
+
+    @staticmethod
+    def default_icon():
         return 'tryton-open'
 
-    def default_sequence(self, cursor, user, context=None):
+    @staticmethod
+    def default_sequence():
         return 10
 
-    def default_active(self, cursor, user, context=None):
+    @staticmethod
+    def default_active():
         return True
 
-    def get_full_name(self, cursor, user, ids, name, args, context):
-        res = {}
-        for menu in self.browse(cursor, user, ids, context=context):
-            res[menu.id] = self._get_one_full_name(menu)
-        return res
+    @staticmethod
+    def list_icons():
+        pool = Pool()
+        Icon = pool.get('ir.ui.icon')
+        return sorted(CLIENT_ICONS
+            + [(name, name) for _, name in Icon.list_icons()])
 
-    def _get_one_full_name(self, menu, level=6):
-        if level <= 0:
-            return '...'
-        if menu.parent:
-            parent_path = self._get_one_full_name(menu.parent, level-1) + "/"
+    @classmethod
+    def validate(cls, menus):
+        super(UIMenu, cls).validate(menus)
+        cls.check_recursion(menus)
+        for menu in menus:
+            menu.check_name()
+
+    def check_name(self):
+        if SEPARATOR in self.name:
+            self.raise_user_error('wrong_name', (self.name,))
+
+    def get_rec_name(self, name):
+        parent = self.parent
+        name = self.name
+        while parent:
+            name = parent.name + SEPARATOR + name
+            parent = parent.parent
+        return name
+
+    @classmethod
+    def search_rec_name(cls, name, clause):
+        if isinstance(clause[2], basestring):
+            values = clause[2].split(SEPARATOR.strip())
+            values.reverse()
+            domain = []
+            field = 'name'
+            for name in values:
+                domain.append((field, clause[1], name.strip()))
+                field = 'parent.' + field
         else:
-            parent_path = ''
-        return parent_path + menu.name
+            domain = [('name',) + tuple(clause[1:])]
+        ids = [m.id for m in cls.search(domain, order=[])]
+        return [('parent', 'child_of', ids)]
 
-    def search(self, cursor, user, domain, offset=0, limit=None, order=None,
-            context=None, count=False, query_string=False):
-        res = super(UIMenu, self).search(cursor, user, domain, offset=offset,
-                limit=limit, order=order, context=context, count=False,
-                query_string=query_string)
-        if query_string:
-            return res
+    @classmethod
+    def search_global(cls, text):
+        # TODO improve search clause
+        for record in cls.search([
+                    ('rec_name', 'ilike', '%%%s%%' % text),
+                    ]):
+            if record.action:
+                yield record.id, record.rec_name, record.icon
 
-        def check_menu(res):
-            if not res:
-                return []
-            menus = self.browse(cursor, user, res, context=context)
+    @classmethod
+    def search(cls, domain, offset=0, limit=None, order=None, count=False,
+            query=False):
+        menus = super(UIMenu, cls).search(domain, offset=offset, limit=limit,
+                order=order, count=False, query=query)
+        if query:
+            return menus
+
+        if menus:
             parent_ids = [x.parent.id for x in menus if x.parent]
-            parent_ids = self.search(cursor, user, [
-                ('id', 'in', parent_ids),
-                ], context=context)
-            parent_ids = check_menu(parent_ids)
-            return [x.id for x in menus
-                    if (x.parent.id in parent_ids) or not x.parent]
+            parents = cls.search([
+                    ('id', 'in', parent_ids),
+                    ])
+            menus = [x for x in menus
+                if (x.parent and x.parent in parents) or not x.parent]
 
-        res = check_menu(res)
         if count:
-            return len(res)
-        return res
+            return len(menus)
+        return menus
 
-    def get_action(self, cursor, user, ids, name, arg, context=None):
-        action_keyword_obj = self.pool.get('ir.action.keyword')
-
-        if context is None:
-            context = {}
-        ctx = context.copy()
-        ctx['active_test'] = False
-
-        res = {}
-        for menu_id in ids:
-            res[menu_id] = False
-        action_keyword_ids = action_keyword_obj.search(cursor, user, [
-            ('keyword', '=', 'tree_open'),
-            ('model', 'in', [self._name + ',' + str(x) for x in ids]),
-            ], context=ctx)
-        for action_keyword in action_keyword_obj.browse(cursor, user,
-                action_keyword_ids, context=context):
-            model_id = int(
-                    action_keyword.model.split(',')[1].split(',')[0].strip('('))
-            action_obj = self.pool.get(action_keyword.action.type)
-            action_id = action_obj.search(cursor, user, [
-                ('action', '=', action_keyword.action.id),
-                ], context=ctx)
-            if action_id:
-                action_id = action_id[0]
+    @classmethod
+    def get_action(cls, menus, name):
+        pool = Pool()
+        ActionKeyword = pool.get('ir.action.keyword')
+        actions = dict((m.id, None) for m in menus)
+        with Transaction().set_context(active_test=False):
+            action_keywords = ActionKeyword.search([
+                    ('keyword', '=', 'tree_open'),
+                    ('model', 'in', [str(m) for m in menus]),
+                    ])
+        for action_keyword in action_keywords:
+            model = action_keyword.model
+            Action = pool.get(action_keyword.action.type)
+            with Transaction().set_context(active_test=False):
+                factions = Action.search([
+                        ('action', '=', action_keyword.action.id),
+                        ], limit=1)
+            if factions:
+                action, = factions
             else:
-                action_id = 0
-            res[model_id] = action_keyword.action.type + ',' + str(action_id)
-        return res
+                action = '%s,0' % action_keyword.action.type
+            actions[model.id] = str(action)
+        return actions
 
-    def action_inv(self, cursor, user, menu_id, name, value, arg,
-            context=None):
-        if context is None:
-            context = {}
+    @classmethod
+    def set_action(cls, menus, name, value):
         if not value:
             return
-        ctx = context.copy()
-        if '_timestamp' in ctx:
-            del ctx['_timestamp']
-        action_keyword_obj = self.pool.get('ir.action.keyword')
-        action_keyword_ids = action_keyword_obj.search(cursor, user, [
-            ('keyword', '=', 'tree_open'),
-            ('model', '=', self._name + ',' + str(menu_id)),
-            ], context=context)
-        if action_keyword_ids:
-            action_keyword_obj.delete(cursor, user, action_keyword_ids,
-                    context=ctx)
-        action_type, action_id = value.split(',')
+        pool = Pool()
+        ActionKeyword = pool.get('ir.action.keyword')
+        action_keywords = []
+        cursor = Transaction().cursor
+        for i in range(0, len(menus), cursor.IN_MAX):
+            sub_menus = menus[i:i + cursor.IN_MAX]
+            action_keywords += ActionKeyword.search([
+                ('keyword', '=', 'tree_open'),
+                ('model', 'in', [str(menu) for menu in sub_menus]),
+                ])
+        if action_keywords:
+            with Transaction().set_context(_timestamp=False):
+                ActionKeyword.delete(action_keywords)
+        if isinstance(value, basestring):
+            action_type, action_id = value.split(',')
+        else:
+            action_type, action_id = value
         if not int(action_id):
             return
-        action_obj = self.pool.get(action_type)
-        action = action_obj.browse(cursor, user, int(action_id),
-                context=context)
-        action_keyword_obj.create(cursor, user, {
-            'keyword': 'tree_open',
-            'model': self._name + ',' + str(menu_id),
-            'action': action.action.id,
-            }, context=ctx)
+        Action = pool.get(action_type)
+        action = Action(int(action_id))
+        to_create = []
+        for menu in menus:
+            with Transaction().set_context(_timestamp=False):
+                to_create.append({
+                        'keyword': 'tree_open',
+                        'model': str(menu),
+                        'action': action.action.id,
+                        })
+        if to_create:
+            ActionKeyword.create(to_create)
 
-UIMenu()
+    @classmethod
+    def get_favorite(cls, menus, name):
+        pool = Pool()
+        Favorite = pool.get('ir.ui.menu.favorite')
+        user = Transaction().user
+        favorites = Favorite.search([
+                ('menu', 'in', [m.id for m in menus]),
+                ('user', '=', user),
+                ])
+        menu2favorite = dict((m.id, False if m.action else None)
+            for m in menus)
+        menu2favorite.update(dict((f.menu.id, True) for f in favorites))
+        return menu2favorite
+
+
+class UIMenuFavorite(ModelSQL, ModelView):
+    "Menu Favorite"
+    __name__ = 'ir.ui.menu.favorite'
+
+    menu = fields.Many2One('ir.ui.menu', 'Menu', required=True,
+        ondelete='CASCADE')
+    sequence = fields.Integer('Sequence')
+    user = fields.Many2One('res.user', 'User', required=True,
+        ondelete='CASCADE')
+
+    @classmethod
+    def __setup__(cls):
+        super(UIMenuFavorite, cls).__setup__()
+        cls.__rpc__.update({
+                'get': RPC(),
+                'set': RPC(readonly=False),
+                'unset': RPC(readonly=False),
+                })
+        cls._order = [
+            ('sequence', 'ASC'),
+            ('id', 'DESC'),
+            ]
+
+    @staticmethod
+    def order_sequence(tables):
+        table, _ = tables[None]
+        return [table.sequence == None, table.sequence]
+
+    @staticmethod
+    def default_user():
+        return Transaction().user
+
+    @classmethod
+    def get(cls):
+        user = Transaction().user
+        favorites = cls.search([
+                ('user', '=', user),
+                ])
+        return [(f.menu.id, f.menu.rec_name, f.menu.icon) for f in favorites]
+
+    @classmethod
+    def set(cls, menu_id):
+        user = Transaction().user
+        cls.create([{
+                    'menu': menu_id,
+                    'user': user,
+                    }])
+
+    @classmethod
+    def unset(cls, menu_id):
+        user = Transaction().user
+        favorites = cls.search([
+                ('menu', '=', menu_id),
+                ('user', '=', user),
+                ])
+        cls.delete(favorites)

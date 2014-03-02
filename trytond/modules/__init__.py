@@ -1,29 +1,45 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from trytond.backend import Database
-import os, sys, imp
+import os
+import sys
 import itertools
-from trytond.config import CONFIG
-import trytond.tools as tools
-import zipfile
-import zipimport
-import traceback
 import logging
+from functools import reduce
+import imp
+import operator
+import ConfigParser
+from glob import iglob
+
+from sql import Table
+from sql.functions import Now
+
+import trytond.tools as tools
+from trytond.config import CONFIG
+from trytond.transaction import Transaction
+from trytond.cache import Cache
+import trytond.convert as convert
+
+ir_module = Table('ir_module_module')
+ir_model_data = Table('ir_model_data')
 
 OPJ = os.path.join
-MODULES_PATH = os.path.dirname(__file__)
-sys.path.insert(1, MODULES_PATH)
+MODULES_PATH = os.path.abspath(os.path.dirname(__file__))
 
 MODULES = []
 
 EGG_MODULES = {}
-try:
-    import pkg_resources
-    for ep in pkg_resources.iter_entry_points('trytond.modules'):
-        mod_name = ep.module_name.split('.')[-1]
-        EGG_MODULES[mod_name] = ep
-except ImportError:
-    pass
+
+
+def update_egg_modules():
+    global EGG_MODULES
+    try:
+        import pkg_resources
+        for ep in pkg_resources.iter_entry_points('trytond.modules'):
+            mod_name = ep.module_name.split('.')[-1]
+            EGG_MODULES[mod_name] = ep
+    except ImportError:
+        pass
+update_egg_modules()
 
 
 class Graph(dict):
@@ -38,8 +54,8 @@ class Graph(dict):
         level = 0
         done = set(self.keys())
         while done:
-            level_modules = [(name, module) for name, module in self.items() \
-                    if module.depth==level]
+            level_modules = [(name, module) for name, module in self.items()
+                if module.depth == level]
             for name, module in level_modules:
                 done.remove(name)
                 yield module
@@ -70,8 +86,10 @@ class Node(Singleton):
         super(Node, self).__init__()
         self.name = name
         self.graph = graph
-        if not hasattr(self, 'datas'):
-            self.datas = None
+
+        # __init__ is called even if Node already exists
+        if not hasattr(self, 'info'):
+            self.info = None
         if not hasattr(self, 'childs'):
             self.childs = []
         if not hasattr(self, 'depth'):
@@ -82,10 +100,7 @@ class Node(Singleton):
         node.depth = max(self.depth + 1, node.depth)
         if node not in self.all_childs():
             self.childs.append(node)
-        for attr in ('init', 'update'):
-            if hasattr(self, attr):
-                setattr(node, attr, True)
-        self.childs.sort(lambda x, y: cmp(x.name, y.name))
+        self.childs.sort(key=operator.attrgetter('name'))
 
     def all_childs(self):
         res = []
@@ -96,13 +111,10 @@ class Node(Singleton):
 
     def has_child(self, name):
         return Node(name, self.graph) in self.childs or \
-                bool([c for c in self.childs if c.has_child(name)])
+            bool([c for c in self.childs if c.has_child(name)])
 
     def __setattr__(self, name, value):
         super(Node, self).__setattr__(name, value)
-        if name in ('init', 'update'):
-            for child in self.childs:
-                setattr(child, name, value)
         if name == 'depth':
             for child in self.childs:
                 setattr(child, name, value + 1)
@@ -120,259 +132,256 @@ class Node(Singleton):
             res += '%s`-> %s' % ('    ' * depth, child.pprint(depth + 1))
         return res
 
-def create_graph(module_list, force=None):
-    if force is None:
-        force = []
+
+def get_module_info(name):
+    "Return the content of the tryton.cfg"
+    config = ConfigParser.ConfigParser()
+    with tools.file_open(os.path.join(name, 'tryton.cfg')) as fp:
+        config.readfp(fp)
+        directory = os.path.dirname(fp.name)
+    info = dict(config.items('tryton'))
+    info['directory'] = directory
+    for key in ('depends', 'extras_depend', 'xml'):
+        if key in info:
+            info[key] = info[key].strip().splitlines()
+    return info
+
+
+def create_graph(module_list):
     graph = Graph()
     packages = []
-    logger = logging.getLogger('modules')
 
     for module in module_list:
-        tryton_file = OPJ(MODULES_PATH, module, '__tryton__.py')
-        mod_path = OPJ(MODULES_PATH, module)
-        if module in ('ir', 'workflow', 'res', 'webdav', 'tests'):
-            root_path = os.path.dirname(os.path.dirname(__file__))
-            tryton_file = OPJ(root_path, module, '__tryton__.py')
-            mod_path = OPJ(root_path, module)
-        elif module in EGG_MODULES:
-            ep = EGG_MODULES[module]
-            tryton_file = OPJ(ep.dist.location, 'trytond', 'modules', module,
-                    '__tryton__.py')
-            mod_path = OPJ(ep.dist.location, 'trytond', 'modules', module)
-        if os.path.isfile(tryton_file) or zipfile.is_zipfile(mod_path+'.zip'):
-            try:
-                info = eval(tools.file_open(tryton_file, subdir='').read())
-            except:
-                logger.error('%s:eval file %s' % (module, tryton_file))
-                raise
-            packages.append((module, info.get('depends', []), info))
-        elif module != 'all':
-            logger.error('%s:Module not found!' % (module,))
+        try:
+            info = get_module_info(module)
+        except IOError:
+            if module != 'all':
+                raise Exception('Module %s not found' % module)
+        packages.append((module, info.get('depends', []),
+                info.get('extras_depend', []), info))
 
     current, later = set([x[0] for x in packages]), set()
+    all_packages = set(current)
     while packages and current > later:
-        package, deps, datas = packages[0]
+        package, deps, xdep, info = packages[0]
 
         # if all dependencies of 'package' are already in the graph,
         # add 'package' in the graph
-        if reduce(lambda x, y: x and y in graph, deps, True):
+        all_deps = deps + [x for x in xdep if x in all_packages]
+        if reduce(lambda x, y: x and y in graph, all_deps, True):
             if not package in current:
                 packages.pop(0)
                 continue
             later.clear()
             current.remove(package)
-            graph.add_node(package, deps)
+            graph.add_node(package, all_deps)
             node = Node(package, graph)
-            node.datas = datas
-            for kind in ('init', 'update'):
-                if (package in CONFIG[kind]) \
-                        or (('all' in CONFIG[kind]) \
-                            and (package != 'tests')) \
-                        or (kind in force):
-                    setattr(node, kind, True)
+            node.info = info
         else:
             later.add(package)
-            packages.append((package, deps, datas))
+            packages.append((package, deps, xdep, info))
         packages.pop(0)
 
-    for package, deps, datas in packages:
+    missings = set()
+    for package, deps, _, _ in packages:
         if package not in later:
             continue
-        missings = [x for x in deps if x not in graph]
-        logger.error('%s:Unmet dependency %s' % (package, missings))
+        missings |= set((x for x in deps if x not in graph))
+    if missings:
+        raise Exception('Missing dependencies: %s' % list(missings
+                - set((p[0] for p in packages))))
     return graph, packages, later
 
-def load_module_graph(cursor, graph, pool, lang=None):
+
+def is_module_to_install(module):
+    for kind in ('init', 'update'):
+        if 'all' in CONFIG[kind] and module != 'tests':
+            return True
+        elif module in CONFIG[kind]:
+            return True
+    return False
+
+
+def load_module_graph(graph, pool, lang=None):
     if lang is None:
-        lang = ['en_US']
+        lang = [CONFIG['language']]
     modules_todo = []
     models_to_update_history = set()
     logger = logging.getLogger('modules')
+    cursor = Transaction().cursor
 
     modules = [x.name for x in graph]
-    cursor.execute('SELECT name, state FROM ir_module_module ' \
-            'WHERE name in (' + ','.join(['%s' for x in modules]) + ')',
-            modules)
-    module2state = {}
-    for name, state in cursor.fetchall():
-        module2state[name] = state
+    cursor.execute(*ir_module.select(ir_module.name, ir_module.state,
+            where=ir_module.name.in_(modules)))
+    module2state = dict(cursor.fetchall())
 
     for package in graph:
         module = package.name
         if module not in MODULES:
             continue
         logger.info(module)
-        sys.stdout.flush()
-        objects = pool.instanciate(module)
+        classes = pool.setup(module)
         package_state = module2state.get(module, 'uninstalled')
-        idref = {}
-        if hasattr(package, 'init') \
-                or hasattr(package, 'update') \
-                or (package_state in ('to install', 'to upgrade')):
-
-            for type in objects.keys():
-                for obj in objects[type]:
-                    logger.info('%s:init %s' % (module, obj._name))
-                    obj.init(cursor, module)
-            for model in objects['model']:
+        if (is_module_to_install(module)
+                or package_state in ('to install', 'to upgrade')):
+            if package_state not in ('to install', 'to upgrade'):
+                if package_state == 'installed':
+                    package_state = 'to upgrade'
+                else:
+                    package_state = 'to install'
+            for child in package.childs:
+                module2state[child.name] = package_state
+            for type in classes.keys():
+                for cls in classes[type]:
+                    logger.info('%s:register %s' % (module, cls.__name__))
+                    cls.__register__(module)
+            for model in classes['model']:
                 if hasattr(model, '_history'):
-                    models_to_update_history.add(model._name)
+                    models_to_update_history.add(model.__name__)
 
             #Instanciate a new parser for the package:
-            tryton_parser = tools.TrytondXmlHandler(
-                cursor=cursor,
-                pool=pool,
-                module=module,)
+            tryton_parser = convert.TrytondXmlHandler(pool=pool, module=module,
+                module_state=package_state)
 
-            for filename in package.datas.get('xml', []):
+            for filename in package.info.get('xml', []):
                 filename = filename.replace('/', os.sep)
-                mode = 'update'
-                if hasattr(package, 'init') or package_state == 'to install':
-                    mode = 'init'
                 logger.info('%s:loading %s' % (module, filename))
-                ext = os.path.splitext(filename)[1]
-                if ext == '.sql':
-                    if mode == 'init':
-                        queries = tools.file_open(OPJ(module,
-                            filename)).read().split(';')
-                        for query in queries:
-                            new_query = ' '.join(query.split())
-                            if new_query:
-                                cursor.execute(new_query)
-                else:
-                    # Feed the parser with xml content:
-                    tryton_parser.parse_xmlstream(
-                        tools.file_open(OPJ(module, filename)))
+                # Feed the parser with xml content:
+                with tools.file_open(OPJ(module, filename)) as fp:
+                    tryton_parser.parse_xmlstream(fp)
 
             modules_todo.append((module, list(tryton_parser.to_delete)))
 
-            for filename in package.datas.get('translation', []):
+            for filename in iglob('%s/%s/*.po'
+                    % (package.info['directory'], 'locale')):
                 filename = filename.replace('/', os.sep)
-                lang2 = os.path.splitext(filename)[0]
+                lang2 = os.path.splitext(os.path.basename(filename))[0]
                 if lang2 not in lang:
                     continue
-                try:
-                    trans_file = tools.file_open(OPJ(module, filename))
-                except IOError:
-                    logger.error('%s:file %s not found!' % (module, filename))
-                    continue
-                logger.info('%s:loading %s' % (module, filename))
-                translation_obj = pool.get('ir.translation')
-                translation_obj.translation_import(cursor, 0, lang2, module,
-                                                   trans_file)
+                logger.info('%s:loading %s' % (module,
+                        filename[len(package.info['directory']) + 1:]))
+                Translation = pool.get('ir.translation')
+                Translation.translation_import(lang2, module, filename)
 
-            cursor.execute("UPDATE ir_module_module SET state = 'installed' " \
-                    "WHERE name = %s", (package.name,))
+            cursor.execute(*ir_module.select(ir_module.id,
+                    where=(ir_module.name == package.name)))
+            try:
+                module_id, = cursor.fetchone()
+                cursor.execute(*ir_module.update([ir_module.state],
+                        ['installed'], where=(ir_module.id == module_id)))
+            except TypeError:
+                cursor.execute(*ir_module.insert(
+                        [ir_module.create_uid, ir_module.create_date,
+                            ir_module.name, ir_module.state],
+                        [[0, Now(), package.name, 'installed']]))
             module2state[package.name] = 'installed'
-
-        # Create missing reports
-        from trytond.report import Report
-        report_obj = pool.get('ir.action.report')
-        report_ids = report_obj.search(cursor, 0, [
-            ('module', '=', module),
-            ])
-        report_names = pool.object_name_list(type='report')
-        for report in report_obj.browse(cursor, 0, report_ids):
-            report_name = report.report_name
-            if report_name not in report_names:
-                report = object.__new__(Report)
-                report._name = report_name
-                pool.add(report, type='report')
-                report.__init__()
 
         cursor.commit()
 
     for model_name in models_to_update_history:
         model = pool.get(model_name)
         if model._history:
-            logger.info('history:update %s' % model._name)
-            model._update_history_table(cursor)
+            logger.info('history:update %s' % model.__name__)
+            model._update_history_table()
 
     # Vacuum :
     while modules_todo:
         (module, to_delete) = modules_todo.pop()
-        tools.post_import(cursor, pool, module, to_delete)
-
+        convert.post_import(pool, module, to_delete)
 
     cursor.commit()
+
 
 def get_module_list():
     module_list = set()
     if os.path.exists(MODULES_PATH) and os.path.isdir(MODULES_PATH):
         for file in os.listdir(MODULES_PATH):
+            if file.startswith('.'):
+                continue
             if os.path.isdir(OPJ(MODULES_PATH, file)):
                 module_list.add(file)
-            elif file[-4:] == '.zip':
-                module_list.add(file[:-4])
+    update_egg_modules()
     module_list.update(EGG_MODULES.keys())
     module_list.add('ir')
-    module_list.add('workflow')
     module_list.add('res')
     module_list.add('webdav')
     module_list.add('tests')
     return list(module_list)
 
-def register_classes():
-    import trytond.ir
-    import trytond.workflow
-    import trytond.res
-    import trytond.webdav
-    import trytond.tests
 
+def register_classes():
+    '''
+    Import modules to register the classes in the Pool
+    '''
+    import trytond.ir
+    trytond.ir.register()
+    import trytond.res
+    trytond.res.register()
+    import trytond.webdav
+    trytond.webdav.register()
+    import trytond.tests
+    trytond.tests.register()
     logger = logging.getLogger('modules')
 
     for package in create_graph(get_module_list())[0]:
         module = package.name
         logger.info('%s:registering classes' % module)
 
-        if module in ('ir', 'workflow', 'res', 'webdav', 'tests'):
+        if module in ('ir', 'res', 'webdav', 'tests'):
             MODULES.append(module)
             continue
 
-        if os.path.isfile(OPJ(MODULES_PATH, module + '.zip')):
-            mod_path = OPJ(MODULES_PATH, module + '.zip')
-            zimp = zipimport.zipimporter(mod_path)
-            zimp.load_module(module)
-        elif os.path.isdir(OPJ(MODULES_PATH, module)):
-            mod_file, pathname, description = imp.find_module(module,
-                    [MODULES_PATH])
-            try:
-                imp.load_module(module, mod_file, pathname, description)
-            finally:
-                if mod_file is not None:
-                    mod_file.close()
+        if os.path.isdir(OPJ(MODULES_PATH, module)):
+            mod_path = MODULES_PATH
         elif module in EGG_MODULES:
             ep = EGG_MODULES[module]
             mod_path = os.path.join(ep.dist.location,
                     *ep.module_name.split('.')[:-1])
-            mod_file, pathname, description = imp.find_module(module,
-                    [mod_path])
-            try:
-                imp.load_module(module, mod_file, pathname, description)
-            finally:
-                if mod_file is not None:
-                    mod_file.close()
+            if not os.path.isdir(mod_path):
+                # Find module in path
+                for path in sys.path:
+                    mod_path = os.path.join(path,
+                            *ep.module_name.split('.')[:-1])
+                    if os.path.isdir(os.path.join(mod_path, module)):
+                        break
+                if not os.path.isdir(os.path.join(mod_path, module)):
+                    # When testing modules from setuptools location is the
+                    # module directory
+                    mod_path = os.path.dirname(ep.dist.location)
         else:
             raise Exception('Couldn\'t find module %s' % module)
+        mod_file, pathname, description = imp.find_module(module,
+                [mod_path])
+        the_module = imp.load_module('trytond.modules.' + module,
+            mod_file, pathname, description)
+        # Some modules register nothing in the Pool
+        if hasattr(the_module, 'register'):
+            the_module.register()
+        if mod_file is not None:
+            mod_file.close()
         MODULES.append(module)
+
 
 def load_modules(database_name, pool, update=False, lang=None):
     res = True
-    database = Database(database_name).connect()
-    cursor = database.cursor()
-    try:
-        force = []
+
+    def _load_modules():
+        cursor = Transaction().cursor
         if update:
+            # Migration from 2.2: workflow module removed
+            cursor.execute(*ir_module.delete(
+                    where=(ir_module.name == 'workflow')))
             if 'all' in CONFIG['init']:
-                cursor.execute("SELECT name FROM ir_module_module " \
-                        "WHERE name != \'tests\'")
+                cursor.execute(*ir_module.select(ir_module.name,
+                        where=(ir_module.name != 'tests')))
             else:
-                cursor.execute("SELECT name FROM ir_module_module " \
-                        "WHERE state IN ('installed', 'to install', " \
-                            "'to upgrade', 'to remove')")
+                cursor.execute(*ir_module.select(ir_module.name,
+                        where=ir_module.state.in_(('installed', 'to install',
+                                'to upgrade', 'to remove'))))
         else:
-            cursor.execute("SELECT name FROM ir_module_module " \
-                    "WHERE state IN ('installed', 'to upgrade', 'to remove')")
+            cursor.execute(*ir_module.select(ir_module.name,
+                    where=ir_module.state.in_(('installed', 'to upgrade',
+                            'to remove'))))
         module_list = [name for (name,) in cursor.fetchall()]
         if update:
             for module in CONFIG['init'].keys():
@@ -381,34 +390,47 @@ def load_modules(database_name, pool, update=False, lang=None):
             for module in CONFIG['update'].keys():
                 if CONFIG['update'][module]:
                     module_list.append(module)
-        graph = create_graph(module_list, force)[0]
+        graph = create_graph(module_list)[0]
 
         try:
-            load_module_graph(cursor, graph, pool, lang)
-        except:
+            load_module_graph(graph, pool, lang)
+        except Exception:
             cursor.rollback()
             raise
 
         if update:
-            cursor.execute("SELECT name FROM ir_module_module " \
-                    "WHERE state IN ('to remove')")
-            if cursor.rowcount:
-                for (mod_name,) in cursor.fetchall():
+            cursor.execute(*ir_module.select(ir_module.name,
+                    where=(ir_module.state == 'to remove')))
+            fetchall = cursor.fetchall()
+            if fetchall:
+                for (mod_name,) in fetchall:
                     #TODO check if ressource not updated by the user
-                    cursor.execute('SELECT model, db_id FROM ir_model_data ' \
-                            'WHERE module = %s ' \
-                            'ORDER BY id DESC', (mod_name,))
+                    cursor.execute(*ir_model_data.select(ir_model_data.model,
+                            ir_model_data.db_id,
+                            where=(ir_model_data.module == mod_name),
+                            order_by=ir_model_data.id.desc))
                     for rmod, rid in cursor.fetchall():
-                        pool.get(rmod).delete(cursor, 0, rid)
+                        Model = pool.get(rmod)
+                        Model.delete([Model(rid)])
                     cursor.commit()
-                cursor.execute("UPDATE ir_module_module SET state = %s " \
-                        "WHERE state IN ('to remove')", ('uninstalled',))
+                cursor.execute(*ir_module.update([ir_module.state],
+                        ['uninstalled'],
+                        where=(ir_module.state == 'to remove')))
                 cursor.commit()
                 res = False
 
-        module_obj = pool.get('ir.module.module')
-        module_obj.update_list(cursor, 0)
+            Module = pool.get('ir.module.module')
+            Module.update_list()
         cursor.commit()
-    finally:
-        cursor.close()
+
+    if not Transaction().cursor:
+        with Transaction().start(database_name, 0):
+            _load_modules()
+    else:
+        with Transaction().new_cursor(), \
+                Transaction().set_user(0), \
+                Transaction().reset_context():
+            _load_modules()
+
+    Cache.resets(database_name)
     return res

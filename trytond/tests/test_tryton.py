@@ -1,259 +1,259 @@
-#!/usr/bin/env python
+# -*- coding: utf-8 -*-
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-
-import sys, os
-DIR = os.path.abspath(os.path.normpath(os.path.join(__file__,
-    '..', '..', '..', 'trytond')))
-if os.path.isdir(DIR):
-    sys.path.insert(0, os.path.dirname(DIR))
-
+import os
+import sys
 import unittest
-import time
-from trytond import pysocket
+import doctest
+from lxml import etree
 
-ADMIN_PASSWORD = 'admin'
-HOST = '127.0.0.1'
-PORT = '8070'
-DB_NAME = 'test_' + str(int(time.time()))
-USERNAME = 'admin'
-PASSWORD = 'admin'
+from trytond.config import CONFIG
+from trytond.pool import Pool
+from trytond import backend
+from trytond.protocols.dispatcher import create
+from trytond.transaction import Transaction
+from trytond.pyson import PYSONEncoder, Eval
+
+__all__ = ['POOL', 'DB_NAME', 'USER', 'USER_PASSWORD', 'CONTEXT',
+    'install_module', 'test_view', 'test_depends', 'doctest_dropdb',
+    'suite', 'all_suite', 'modules_suite']
+
+Pool.start()
+USER = 1
+USER_PASSWORD = 'admin'
 CONTEXT = {}
-USER = None
-SESSION = None
-
-SOCK = pysocket.PySocket()
-SOCK.connect(HOST, PORT)
-
-class DBTestCase(unittest.TestCase):
-    '''
-    Test DB service.
-    '''
-
-    def test0010create(self):
-        '''
-        Create database.
-        '''
-        SOCK.send((None, None, None, 'common', 'db', 'create', DB_NAME,
-            ADMIN_PASSWORD, 'en_US', PASSWORD))
-        res = SOCK.receive()
-        self.assert_(res)
-
-    def test0020list(self):
-        '''
-        List databases.
-        '''
-        SOCK.send((None, None, None, 'common', 'db', 'list'))
-        res = SOCK.receive()
-        self.assert_(DB_NAME in res)
-
-    def test0030login(self):
-        '''
-        Login.
-        '''
-        login()
+DB_NAME = os.environ['DB_NAME']
+DB = backend.get('Database')(DB_NAME)
+Pool.test = True
+POOL = Pool(DB_NAME)
 
 
-class MPTTTestCase(unittest.TestCase):
-    '''
-    Test Modified Preorder Tree Traversal.
-    '''
+class ModelViewTestCase(unittest.TestCase):
+    'Test ModelView'
 
     def setUp(self):
-        install_module('tests')
-        self.mptt = RPCProxy('tests.mptt')
+        install_module('ir')
+        install_module('res')
+        install_module('webdav')
 
-    def CheckTree(self, parent_id=False, left=0, right=0):
-        child_ids = self.mptt.search([
-            ('parent', '=', parent_id),
-            ], 0, None, None, CONTEXT)
-        childs = self.mptt.read(child_ids, ['left', 'right'], CONTEXT)
-        childs.sort(lambda x, y: cmp(child_ids.index(x['id']),
-            child_ids.index(y['id'])))
-        for child in childs:
-            assert child['left'] > left, \
-                    'Record (%d): left %d <= parent left %d' % \
-                    (child['id'], child['left'], left)
-            assert child['left'] < child['right'], \
-                    'Record (%d): left %d >= right %d' % \
-                    (child['id'], child['left'], child['right'])
-            assert right == 0 or child['right'] < right, \
-                    'Record (%d): right %d >= parent right %d' % \
-                    (child['id'], child['right'], right)
-            self.CheckTree(child['id'], left=child['left'],
-                    right=child['right'])
-        next_left = 0
-        for child in childs:
-            assert child['left'] > next_left, \
-                    'Record (%d): left %d <= next left %d' % \
-                    (child['id'], child['left'], next_left)
-            next_left = child['right']
-        childs.reverse()
-        previous_right = 0
-        for child in childs:
-            assert previous_right == 0 or child['right'] < previous_right, \
-                    'Record (%d): right %d >= previous right %d' % \
-                    (child['id'] , child['right'], previous_right)
-            previous_right = child['left']
+    def test0000test(self):
+        'Test test'
+        self.assertRaises(Exception, install_module, 'nosuchmodule')
+        self.assertRaises(Exception, test_view, 'nosuchmodule')
 
-    def test0010create(self):
-        '''
-        Create tree.
-        '''
-        new_records = [False]
-        for j in range(3):
-            parent_records = new_records
-            new_records = []
-            k = 0
-            for parent_record in parent_records:
-                for i in range(3):
-                    record_id = self.mptt.create({
-                        'name': 'Test %d %d %d' % (j, k, i),
-                        'parent': parent_record,
-                        }, CONTEXT)
-                    new_records.append(record_id)
-                k += 1
-        self.CheckTree()
+    def test0010ir(self):
+        'Test ir'
+        test_view('ir')
 
-    def test0020reorder(self):
-        '''
-        Re-order.
-        '''
-        def reorder(parent_id=False):
-            record_ids = self.mptt.search([
-                ('parent', '=', parent_id),
-                ], CONTEXT)
-            if not record_ids:
-                return
-            i = len(record_ids)
-            for record_id in record_ids:
-                self.mptt.write(record_id, {
-                    'sequence': i,
-                    }, CONTEXT)
-                i -= 1
-                self.CheckTree()
-            i = 0
-            for record_id in record_ids:
-                self.mptt.write(record_id, {
-                    'sequence': i,
-                    }, CONTEXT)
-                i += 1
-                self.CheckTree()
-            for record_id in record_ids:
-                reorder(record_id)
-        reorder()
-        record_ids = self.mptt.search([], CONTEXT)
-        self.mptt.write(record_ids, {
-            'sequence': 0,
-            }, CONTEXT)
-        self.CheckTree()
+    def test0020res(self):
+        'Test res'
+        test_view('res')
 
-    def test0030reparent(self):
-        '''
-        Re-parent.
-        '''
-        def reparent(parent_id=False):
-            record_ids = self.mptt.search([
-                ('parent', '=', parent_id),
-                ], CONTEXT)
-            if not record_ids:
-                return
-            for record_id in record_ids:
-                for record2_id in record_ids:
-                    if record_id != record2_id:
-                        self.mptt.write(record_id, {
-                            'parent': record2_id,
-                            }, CONTEXT)
-                        self.CheckTree()
-                        self.mptt.write(record_id, {
-                            'parent': parent_id,
-                            }, CONTEXT)
-                        self.CheckTree()
-            for record_id in record_ids:
-                reparent(record_id)
-        reparent()
-
-    def test0040delete(self):
-        '''
-        Delete.
-        '''
-        record_ids = self.mptt.search([], CONTEXT)
-        for record_id in record_ids:
-            if record_id % 2:
-                self.mptt.delete(record_id, CONTEXT)
-                self.CheckTree()
-        record_ids = self.mptt.search([], CONTEXT)
-        self.mptt.delete(record_ids[:len(record_ids)/2], CONTEXT)
-        self.CheckTree()
-        record_ids = self.mptt.search([], CONTEXT)
-        self.mptt.delete(record_ids, CONTEXT)
-        self.CheckTree()
+    def test0040webdav(self):
+        'Test webdav'
+        test_view('webdav')
 
 
-class RPCProxy(object):
+class FieldDependsTestCase(unittest.TestCase):
+    'Test Field depends'
 
-    def __init__(self, name):
-        self.name = name
-        self.__attrs = {}
+    def setUp(self):
+        install_module('ir')
+        install_module('res')
+        install_module('webdav')
 
-    def __getattr__(self, attr):
-        if attr not in self.__attrs:
-            self.__attrs[attr] = RPCFunction(self.name, attr)
-        return self.__attrs[attr]
+    def test0010depends(self):
+        'Test depends'
+        test_depends()
 
-
-class RPCFunction(object):
-
-    def __init__(self, name, func_name):
-        self.name = name
-        self.func_name = func_name
-
-    def __call__(self, *args):
-        SOCK.send((DB_NAME, USER, SESSION, 'model', self.name, self.func_name) \
-                + args)
-        res = SOCK.receive()
-        return res
-
-def login():
-    global USER, SESSION, CONTEXT
-    SOCK.send((DB_NAME, USERNAME, PASSWORD, 'common', 'db', 'login'))
-    USER, SESSION = SOCK.receive()
-    user = RPCProxy('res.user')
-    context = user.get_preferences(True, {})
-    for i in context:
-        value = context[i]
-        CONTEXT[i] = value
 
 def install_module(name):
-    module = RPCProxy('ir.module.module')
-    module_ids = module.search([
-        ('name', '=', name),
-        ('state', '!=', 'installed'),
-        ])
+    '''
+    Install module for the tested database
+    '''
+    Database = backend.get('Database')
+    database = Database().connect()
+    cursor = database.cursor()
+    databases = database.list(cursor)
+    cursor.close()
+    if DB_NAME not in databases:
+        create(DB_NAME, CONFIG['admin_passwd'], 'en_US', USER_PASSWORD)
+    with Transaction().start(DB_NAME, USER,
+            context=CONTEXT) as transaction:
+        Module = POOL.get('ir.module.module')
 
-    if not module_ids:
-        return
+        modules = Module.search([
+                ('name', '=', name),
+                ])
+        assert modules
 
-    module.button_install(module_ids, CONTEXT)
+        modules = Module.search([
+                ('name', '=', name),
+                ('state', '!=', 'installed'),
+                ])
 
-    SOCK.send((DB_NAME, USER, SESSION, 'wizard',
-        'ir.module.module.install_upgrade', 'create'))
-    wiz_id = SOCK.receive()
+        if not modules:
+            return
 
-    SOCK.send((DB_NAME, USER, SESSION, 'wizard',
-        'ir.module.module.install_upgrade', 'execute', wiz_id, {}, 'start',
-        CONTEXT))
-    SOCK.receive()
+        Module.install(modules)
+        transaction.cursor.commit()
 
-    SOCK.send((DB_NAME, USER, SESSION, 'wizard',
-        'ir.module.module.install_upgrade', 'delete', wiz_id))
-    SOCK.receive()
+        InstallUpgrade = POOL.get('ir.module.module.install_upgrade',
+            type='wizard')
+        instance_id, _, _ = InstallUpgrade.create()
+        transaction.cursor.commit()
+        InstallUpgrade(instance_id).transition_upgrade()
+        InstallUpgrade.delete(instance_id)
+        transaction.cursor.commit()
+
+
+def test_view(module_name):
+    '''
+    Test validity of all views of the module
+    '''
+    with Transaction().start(DB_NAME, USER,
+            context=CONTEXT) as transaction:
+        View = POOL.get('ir.ui.view')
+        views = View.search([
+                ('module', '=', module_name),
+                ('model', '!=', ''),
+                ])
+        assert views, "No views for %s" % module_name
+        for view in views:
+            view_id = view.inherit and view.inherit.id or view.id
+            model = view.model
+            Model = POOL.get(model)
+            res = Model.fields_view_get(view_id)
+            assert res['model'] == model
+            tree = etree.fromstring(res['arch'])
+            tree_root = tree.getroottree().getroot()
+
+            for element in tree_root.iter():
+                if element.tag in ('field', 'label', 'separator', 'group'):
+                    for attr in ('name', 'icon'):
+                        field = element.get(attr)
+                        if field:
+                            assert field in res['fields'], ('Missing field: %s'
+                                % field)
+        transaction.cursor.rollback()
+
+
+def test_depends():
+    '''
+    Test for missing depends
+    '''
+    class Encoder(PYSONEncoder):
+
+        def __init__(self, *args, **kwargs):
+            super(Encoder, self).__init__(*args, **kwargs)
+            self.fields = set()
+
+        def default(self, obj):
+            if isinstance(obj, Eval):
+                fname = obj._value
+                if not fname.startswith('_parent_'):
+                    self.fields.add(fname)
+            return super(Encoder, self).default(obj)
+
+    with Transaction().start(DB_NAME, USER, context=CONTEXT):
+        for mname, model in Pool().iterobject():
+            for fname, field in model._fields.iteritems():
+                encoder = Encoder()
+                encoder.encode(field.domain)
+                if hasattr(field, 'digits'):
+                    encoder.encode(field.digits)
+                if hasattr(field, 'add_remove'):
+                    encoder.encode(field.add_remove)
+                encoder.fields.discard(fname)
+                encoder.fields.discard('context')
+                encoder.fields.discard('_user')
+                depends = set(field.depends)
+                assert encoder.fields <= depends, (
+                    'Missing depends %s in "%s"."%s"' % (
+                        list(encoder.fields - depends), mname, fname))
+                assert depends <= set(model._fields), (
+                    'Unknown depends %s in "%s"."%s"' % (
+                        list(depends - set(model._fields)), mname, fname))
+
+
+def doctest_dropdb(test):
+    '''Remove SQLite memory database'''
+    from trytond.backend.sqlite.database import Database as SQLiteDatabase
+    database = SQLiteDatabase().connect()
+    cursor = database.cursor(autocommit=True)
+    try:
+        SQLiteDatabase.drop(cursor, ':memory:')
+        cursor.commit()
+    finally:
+        cursor.close()
+
 
 def suite():
-    return unittest.TestLoader().loadTestsFromTestCase(DBTestCase)
+    '''
+    Return test suite for other modules
+    '''
+    return unittest.TestSuite()
 
-if __name__ == '__main__':
-    suite = suite()
-    suite.addTests(unittest.TestLoader().loadTestsFromTestCase(MPTTTestCase))
-    unittest.TextTestRunner(verbosity=2).run(suite)
-    SOCK.disconnect()
+
+def all_suite(modules=None):
+    '''
+    Return all tests suite of current module
+    '''
+    suite_ = suite()
+    for fn in os.listdir(os.path.dirname(__file__)):
+        if fn.startswith('test_') and fn.endswith('.py'):
+            if modules and fn[:-3] not in modules:
+                continue
+            modname = 'trytond.tests.' + fn[:-3]
+            __import__(modname)
+            module = module = sys.modules[modname]
+            suite_.addTest(module.suite())
+    return suite_
+
+
+def modules_suite(modules=None):
+    '''
+    Return all tests suite of all modules
+    '''
+    if modules:
+        suite_ = suite()
+    else:
+        suite_ = all_suite()
+    from trytond.modules import create_graph, get_module_list, \
+        MODULES_PATH, EGG_MODULES
+    graph = create_graph(get_module_list())[0]
+    for package in graph:
+        module = package.name
+        if modules and module not in modules:
+            continue
+        test_module = 'trytond.modules.%s.tests' % module
+        if os.path.isdir(os.path.join(MODULES_PATH, module)) or \
+                module in EGG_MODULES:
+            try:
+                test_mod = __import__(test_module, fromlist=[''])
+            except ImportError:
+                continue
+        else:
+            continue
+        for test in test_mod.suite():
+            found = False
+            for other in suite_:
+                if type(test) == type(other):
+                    if isinstance(test, doctest.DocTestCase):
+                        if str(test) == str(other):
+                            found = True
+                            break
+                    elif test._testMethodName == other._testMethodName:
+                        found = True
+                        break
+            if not found:
+                suite_.addTest(test)
+    tests = []
+    doc_tests = []
+    for test in suite_:
+        if isinstance(test, doctest.DocTestCase):
+            doc_tests.append(test)
+        else:
+            tests.append(test)
+    tests.extend(doc_tests)
+    return unittest.TestSuite(tests)

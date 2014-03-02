@@ -1,122 +1,106 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
 
-from trytond.model.fields.field import Field
 import inspect
+import copy
+from trytond.model.fields.field import Field
 
 
 class Function(Field):
     '''
-    Define function field (any)
+    Define function field (any).
     '''
-    _type = 'float'
 
-    def __init__(self, fnct, arg=None, fnct_inv='', fnct_inv_arg=None,
-            type='float', fnct_search='', model_name=None, selection=None,
-            digits=None, relation=None, add_remove=None, string='', help='',
-            required=False, readonly=False, domain=None, states=None,
-            priority=0, change_default=False, translate=False, select=0,
-            on_change=None, on_change_with=None, depends=None, order_field=None,
-            context=None):
+    def __init__(self, field, getter, setter=None, searcher=None,
+            loading='lazy'):
         '''
-        :param fnct: The name of the function.
-        :param arg: Argument for the function.
-        :param fnct_inv: The name of the function to write.
-        :param fnct_inv_arg: Argument for the function to write.
-        :param type: The type of field.
-        :param fnct_search: The name of the function to search.
-        :param model_name: See Many2One.
-        :param selection: See Selection.
-        :param digits: See Float.
-        :param relation: Like model_name.
-        :param add_remove: See Many2One.
+        :param field: The field of the function.
+        :param getter: The name of the function for getting values.
+        :param setter: The name of the function to set value.
+        :param searcher: The name of the function to search.
+        :param loading: Define how the field must be loaded:
+            ``lazy`` or ``eager``.
         '''
-        super(Function, self).__init__(string=string, help=help,
-                required=required, readonly=readonly, domain=domain,
-                states=states, priority=priority, change_default=change_default,
-                translate=translate, select=select, on_change=on_change,
-                on_change_with=on_change_with, depends=depends,
-                order_field=order_field, context=context)
-        self.model_name = model_name
-        self.fnct = fnct
-        self.arg = arg
-        self.fnct_inv = fnct_inv
-        self.fnct_inv_arg = fnct_inv_arg
-        if not self.fnct_inv:
-            self.readonly = True
-        self._type = type
-        self.fnct_search = fnct_search
-        self.selection = selection
-        self.digits = digits
-        if relation:
-            self.model_name = relation
-        self.add_remove = add_remove
+        assert isinstance(field, Field)
+        self._field = field
+        self._type = field._type
+        self.getter = getter
+        self.setter = setter
+        if not self.setter:
+            self._field.readonly = True
+        self.searcher = searcher
+        assert loading in ('lazy', 'eager'), \
+            'loading must be "lazy" or "eager"'
+        self.loading = loading
+
     __init__.__doc__ += Field.__init__.__doc__
 
-    def search(self, cursor, user, model, name, args, context=None):
-        '''
-        Call the fnct_search.
+    def __copy__(self):
+        return Function(copy.copy(self._field), self.getter,
+                setter=self.setter, searcher=self.searcher)
 
-        :param cursor: The database cursor.
-        :param user: The user id.
-        :param model: The model.
-        :param args: The search domain. See ModelStorage.search
-        :param context: The context.
-        :return: New list of domain.
-        '''
-        if not self.fnct_search:
-            return []
-        return getattr(model, self.fnct_search)(cursor, user, name, args,
-                context=context)
+    def __deepcopy__(self, memo):
+        return Function(copy.deepcopy(self._field, memo),
+            copy.deepcopy(self.getter, memo),
+            setter=copy.deepcopy(self.setter, memo),
+            searcher=copy.deepcopy(self.searcher, memo),
+            loading=copy.deepcopy(self.loading, memo))
 
-    def get(self, cursor, user, ids, model, name, values=None, context=None):
+    def __getattr__(self, name):
+        return getattr(self._field, name)
+
+    def __getitem__(self, name):
+        return self._field[name]
+
+    def __setattr__(self, name, value):
+        if name in ('_field', '_type', 'getter', 'setter', 'searcher', 'name'):
+            object.__setattr__(self, name, value)
+            if name != 'name':
+                return
+        setattr(self._field, name, value)
+
+    def convert_domain(self, domain, tables, Model):
+        name, operator, value = domain[:3]
+        if not self.searcher:
+            Model.raise_user_error('search_function_missing', name)
+        return getattr(Model, self.searcher)(name, domain)
+
+    def get(self, ids, Model, name, values=None):
         '''
-        Call the fnct.
+        Call the getter.
         If the function has ``names`` in the function definition then
         it will call it with a list of name.
-
-        :param cursor: The database cursor.
-        :param user: The user id.
-        :param ids: A list of ids.
-        :param model: The model.
-        :param name: The name of the field or a list of name field.
-        :param values:
-        :param context: The contest.
-        :return: a dictionary with ids as key and values as value or
-            a dictionary with name as key and a dictionary as value if
-            name is a list of field name.
         '''
+        method = getattr(Model, self.getter)
+
+        def call(name):
+            records = Model.browse(ids)
+            if not hasattr(method, 'im_self') or method.im_self:
+                return method(records, name)
+            else:
+                return dict((r.id, method(r, name)) for r in records)
         if isinstance(name, list):
             names = name
             # Test is the function works with a list of names
-            if 'names' in inspect.getargspec(getattr(model, self.fnct))[0]:
-                return getattr(model, self.fnct)(cursor, user, ids, names,
-                        self.arg, context=context)
-            res = {}
-            for name in names:
-                res[name] = getattr(model, self.fnct)(cursor, user, ids, name,
-                        self.arg, context=context)
-            return res
+            if 'names' in inspect.getargspec(method)[0]:
+                return call(names)
+            return dict((name, call(name)) for name in names)
         else:
             # Test is the function works with a list of names
-            if 'names' in inspect.getargspec(getattr(model, self.fnct))[0]:
+            if 'names' in inspect.getargspec(method)[0]:
                 name = [name]
-            return getattr(model, self.fnct)(cursor, user, ids, name, self.arg,
-                    context=context)
+            return call(name)
 
-
-    def set(self, cursor, user, record_id, model, name, value, context=None):
+    def set(self, Model, name, ids, value, *args):
         '''
-        Call the fnct_inv.
-
-        :param cursor: The database cursor.
-        :param user: The user id.
-        :param record_id: The record id.
-        :param model: The model.
-        :param name: The name of the field.
-        :param value: The value to set.
-        :param context: The context.
+        Call the setter.
         '''
-        if self.fnct_inv:
-            getattr(model, self.fnct_inv)(cursor, user, record_id, name, value,
-                    self.fnct_inv_arg, context=context)
+        if self.setter:
+            # TODO change setter API to use sequence of records, value
+            setter = getattr(Model, self.setter)
+            args = iter((ids, value) + args)
+            for ids, value in zip(args, args):
+                setter(Model.browse(ids), name, value)
+
+    def __set__(self, inst, value):
+        self._field.__set__(inst, value)

@@ -6,51 +6,20 @@ this repository contains the full copyright notices and license terms. -->
         <record model="res.group" id="group_admin">
             <field name="name">Administration</field>
         </record>
-        <record model="ir.ui.menu" id="ir.menu_administration">
-            <field name="groups" eval="[('add', ref('group_admin'))]"/>
-        </record>
         <record model="ir.ui.view" id="group_view_form">
             <field name="model">res.group</field>
             <field name="type">form</field>
-            <field name="arch" type="xml">
-              <![CDATA[
-                <form string="Group">
-                    <label name="name"/>
-                    <field name="name"/>
-                    <notebook>
-                        <page string="Group" col="2" id="group">
-                            <separator name="users" colspan="2"/>
-                            <field name="users" colspan="2"/>
-                        </page>
-                        <page string="Security" col="1" id="security">
-                            <separator name="model_access"/>
-                            <field name="model_access"/>
-                            <separator name="menu_access"/>
-                            <field name="menu_access"/>
-                            <separator name="rule_groups"/>
-                            <field name="rule_groups"/>
-                        </page>
-                    </notebook>
-                </form>
-                ]]>
-            </field>
+            <field name="name">group_form</field>
         </record>
         <record model="ir.ui.view" id="group_view_tree">
             <field name="model">res.group</field>
             <field name="type">tree</field>
-            <field name="arch" type="xml">
-              <![CDATA[
-                <tree string="Groups" fill="1">
-                    <field name="name" select="1"/>
-                </tree>
-                ]]>
-            </field>
+            <field name="name">group_list</field>
         </record>
         <record model="ir.action.act_window" id="act_group_form">
             <field name="name">Groups</field>
             <field name="type">ir.action.act_window</field>
             <field name="res_model">res.group</field>
-            <field name="view_type">form</field>
         </record>
         <record model="ir.action.act_window.view"
             id="act_group_form_view1">
@@ -66,6 +35,11 @@ this repository contains the full copyright notices and license terms. -->
         </record>
         <menuitem parent="res.menu_res"
             action="act_group_form" id="menu_group_form"/>
+        <record model="ir.ui.menu-res.group" id="menu_group_form_admin">
+            <field name="menu" ref="menu_group_form"/>
+            <field name="group" ref="group_admin"/>
+        </record>
+
         <record model="ir.model.access" id="access_group">
             <field name="model" search="[('model', '=', 'res.group')]"/>
             <field name="perm_read" eval="True"/>
