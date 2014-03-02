@@ -1,53 +1,51 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from __future__ import with_statement
-from trytond.backend import Database
-from trytond.session import Session
 from trytond.pool import Pool
 from trytond.config import CONFIG
 from trytond.transaction import Transaction
-import time
+from trytond.exceptions import NotLogged
 
 
-_USER_CACHE = {}
-_USER_TRY = {}
+def _get_pool(dbname):
+    database_list = Pool.database_list()
+    pool = Pool(dbname)
+    if not dbname in database_list:
+        pool.init()
+    return pool
+
 
 def login(dbname, loginname, password, cache=True):
-    _USER_TRY.setdefault(dbname, {})
-    _USER_TRY[dbname].setdefault(loginname, 0)
     with Transaction().start(dbname, 0) as transaction:
-        database_list = Pool.database_list()
-        pool = Pool(dbname)
-        if not dbname in database_list:
-            pool.init()
-        user_obj = pool.get('res.user')
-        user_id = user_obj.get_login(loginname, password)
+        pool = _get_pool(dbname)
+        User = pool.get('res.user')
+        user_id = User.get_login(loginname, password)
         transaction.cursor.commit()
     if user_id:
-        _USER_TRY[dbname][loginname] = 0
-        if cache:
-            _USER_CACHE.setdefault(dbname, {})
-            _USER_CACHE[dbname].setdefault(user_id, [])
-            session = Session(user_id)
-            session.name = loginname
-            _USER_CACHE[dbname][user_id].append(session)
-            return (user_id, session.session)
-        else:
+        if not cache:
             return user_id
-    time.sleep(2 ** _USER_TRY[dbname][loginname])
-    _USER_TRY[dbname][loginname] += 1
+        with Transaction().start(dbname, user_id) as transaction:
+            Session = pool.get('ir.session')
+            session, = Session.create([{}])
+            transaction.cursor.commit()
+            return user_id, session.key
     return False
 
+
 def logout(dbname, user, session):
-    name = ''
-    if _USER_CACHE.get(dbname, {}).has_key(user):
-        for i, real_session \
-                in enumerate(_USER_CACHE[dbname][user]):
-            if real_session.session == session:
-                name = real_session.name
-                del _USER_CACHE[dbname][user][i]
-                break
+    with Transaction().start(dbname, 0) as transaction:
+        pool = _get_pool(dbname)
+        Session = pool.get('ir.session')
+        sessions = Session.search([
+                ('key', '=', session),
+                ])
+        if not sessions:
+            return
+        session, = sessions
+        name = session.create_uid.login
+        Session.delete(sessions)
+        transaction.cursor.commit()
     return name
+
 
 def check_super(passwd):
     if passwd == CONFIG['admin_passwd']:
@@ -55,33 +53,19 @@ def check_super(passwd):
     else:
         raise Exception('AccessDenied')
 
+
 def check(dbname, user, session):
     if user == 0:
         raise Exception('AccessDenied')
-    result = None
-    now = time.time()
-    timeout = int(CONFIG['session_timeout'])
-    if _USER_CACHE.get(dbname, {}).has_key(user):
-        to_del = []
-        for i, real_session \
-                in enumerate(_USER_CACHE[dbname][user]):
-            if abs(real_session.timestamp - now) < timeout:
-                if real_session.session == session:
-                    result = real_session
+    if not user:
+        raise NotLogged()
+    with Transaction().start(dbname, user) as transaction:
+        pool = _get_pool(dbname)
+        Session = pool.get('ir.session')
+        try:
+            if not Session.check(user, session):
+                raise NotLogged()
             else:
-                to_del.insert(0, i)
-        for i in to_del:
-            del _USER_CACHE[dbname][user][i]
-    if result:
-        return result
-    raise Exception('NotLogged')
-
-def get_connections(dbname, user):
-    res = 0
-    now = time.time()
-    timeout = int(CONFIG['session_timeout'])
-    if _USER_CACHE.get(dbname, {}).has_key(int(user)):
-        for _, session in enumerate(_USER_CACHE[dbname][int(user)]):
-            if abs(session.timestamp - now) < timeout:
-                res += 1
-    return res
+                return user
+        finally:
+            transaction.cursor.commit()

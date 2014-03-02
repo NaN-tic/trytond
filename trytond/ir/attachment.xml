@@ -6,47 +6,17 @@ this repository contains the full copyright notices and license terms. -->
         <record model="ir.ui.view" id="attachment_view_form">
             <field name="model">ir.attachment</field>
             <field name="type">form</field>
-            <field name="arch" type="xml">
-              <![CDATA[
-                <form string="Attachments" col="2">
-                    <label name="resource"/>
-                    <field name="resource"/>
-                    <label name="name"/>
-                    <field name="name"/>
-                    <label name="datas"/>
-                    <field name="datas"/>
-                    <label name="link"/>
-                    <field name="link" widget="url"/>
-                    <notebook colspan="2">
-                        <page string="Preview" name="preview" col="1">
-                            <field name="datas" widget="image"/>
-                        </page>
-                        <page name="description" col="1">
-                            <field name="description"/>
-                        </page>
-                    </notebook>
-                </form>
-                ]]>
-            </field>
+            <field name="name">attachment_form</field>
         </record>
         <record model="ir.ui.view" id="attachment_view_tree">
             <field name="model">ir.attachment</field>
             <field name="type">tree</field>
-            <field name="arch" type="xml">
-              <![CDATA[
-                <tree string="Attachments" fill="1">
-                    <field name="resource" select="1"/>
-                    <field name="name" select="1"/>
-                    <field name="datas_size"/>
-                </tree>
-                ]]>
-            </field>
+            <field name="name">attachment_list</field>
         </record>
         <record model="ir.action.act_window" id="act_attachment_form">
             <field name="name">Attachments</field>
             <field name="type">ir.action.act_window</field>
             <field name="res_model">ir.attachment</field>
-            <field name="view_type">form</field>
         </record>
         <record model="ir.action.act_window.view"
             id="act_attachment_form_view1">

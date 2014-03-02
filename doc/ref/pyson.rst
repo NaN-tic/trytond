@@ -72,9 +72,12 @@ An :class:`Eval()` object represents the PYSON ``Eval()``
 statement for evaluations. When evaluated, it returns the
 value of the statement named by ``value``, if defined in the
 evaluation context, otherwise the ``default`` value (empty
-string by default). ``value`` can use the dot notation to
-access objects values in the context. Returns an instance of
-itself.
+string by default).  Returns an instance of itself.
+
+.. note::
+
+    The default value determines the type of the statement.
+..
 
 .. class:: Not(value)
 
@@ -247,4 +250,13 @@ Arguments:
 ``delta_microseconds``
     Contains a PYSON statement of type int or long.
 
+.. class:: Len(value)
 
+A :class:`Len` object represents the PYSON ``Len()`` statement for length of a
+dictionary, list or string. Returns the number of items in ``value``.
+
+.. class:: Id(module, fs_id)
+
+An :class:`Id` object represents the PYSON ``Id()`` statement for filesystem id
+evaluations. When converted into the internal dictionary, it returns the
+database id stored in `ir.model.data`.

@@ -1,6 +1,5 @@
 #This file is part of Tryton.  The COPYRIGHT file at the top level of
 #this repository contains the full copyright notices and license terms.
-from __future__ import with_statement
 import time
 from xml import sax
 from decimal import Decimal
@@ -9,12 +8,17 @@ import logging
 import traceback
 import sys
 import re
-from trytond.version import VERSION
-from trytond.tools import safe_eval
-from trytond.transaction import Transaction
+from sql import Table
+from itertools import izip
+from collections import defaultdict
+
+from .version import VERSION
+from .tools import safe_eval
+from .transaction import Transaction
 
 CDATA_START = re.compile('^\s*\<\!\[cdata\[', re.IGNORECASE)
 CDATA_END = re.compile('\]\]\>\s*$', re.IGNORECASE)
+
 
 class DummyTagHandler:
     """Dubhandler implementing empty methods. Will be used when whe
@@ -56,49 +60,67 @@ class MenuitemTagHandler:
         if values.get('parent'):
             values['parent'] = self.mh.get_id(values['parent'])
 
-        action_name = False
+        action_name = None
         if values.get('action'):
             action_id = self.mh.get_id(values['action'])
 
             # TODO maybe use a prefetch for this:
-            cursor.execute(cursor.limit_clause(
-            "SELECT a.name, a.type, act.view_type, v.type " \
-            "FROM ir_action a " \
-                "LEFT JOIN ir_action_report report ON (a.id = report.action) " \
-                "LEFT JOIN ir_action_act_window act ON (a.id = act.action) " \
-                "LEFT JOIN ir_action_wizard wizard ON (a.id = wizard.action) " \
-                "LEFT JOIN ir_action_url url ON (a.id = url.action) " \
-                "LEFT JOIN ir_action_act_window_view wv ON " \
-                    "(act.id = wv.act_window) " \
-                "LEFT JOIN ir_ui_view v on (v.id = wv.view) " \
-            "WHERE report.id = %s " \
-                "OR act.id = %s " \
-                "OR wizard.id = %s " \
-                "OR url.id = %s " \
-            "ORDER by wv.sequence", 1),
-            (action_id, action_id, action_id, action_id))
-            action_name, action_type, view_type, view_mode = \
-                    cursor.fetchone()
+            action = Table('ir_action')
+            report = Table('ir_action_report')
+            act_window = Table('ir_action_act_window')
+            wizard = Table('ir_action_wizard')
+            url = Table('ir_action_url')
+            act_window_view = Table('ir_action_act_window_view')
+            view = Table('ir_ui_view')
+            icon = Table('ir_ui_icon')
+            cursor.execute(*action.join(
+                    report, 'LEFT',
+                    condition=action.id == report.action
+                    ).join(act_window, 'LEFT',
+                    condition=action.id == act_window.action
+                    ).join(wizard, 'LEFT',
+                    condition=action.id == wizard.action
+                    ).join(url, 'LEFT',
+                    condition=action.id == url.action
+                    ).join(act_window_view, 'LEFT',
+                    condition=act_window.id == act_window_view.act_window
+                    ).join(view, 'LEFT',
+                    condition=view.id == act_window_view.view
+                    ).join(icon, 'LEFT',
+                    condition=action.icon == icon.id).select(
+                    action.name, action.type,
+                    view.type, view.field_childs,
+                    icon.name,
+                    where=(report.id == action_id)
+                    | (act_window.id == action_id)
+                    | (wizard.id == action_id)
+                    | (url.id == action_id),
+                    order_by=act_window_view.sequence, limit=1))
+            action_name, action_type, view_type, field_childs, icon_name = \
+                cursor.fetchone()
 
             values['action'] = '%s,%s' % (action_type, action_id)
 
             icon = attributes.get('icon', '')
             if icon:
                 values['icon'] = icon
+            elif icon_name:
+                values['icon'] = icon_name
             elif action_type == 'ir.action.wizard':
                 values['icon'] = 'tryton-executable'
             elif action_type == 'ir.action.report':
                 values['icon'] = 'tryton-print'
             elif action_type == 'ir.action.act_window':
                 if view_type == 'tree':
-                    values['icon'] = 'tryton-tree'
-                elif view_mode and view_mode.startswith('tree'):
-                    values['icon'] = 'tryton-list'
-                elif view_mode and view_mode.startswith('form'):
+                    if field_childs:
+                        values['icon'] = 'tryton-tree'
+                    else:
+                        values['icon'] = 'tryton-list'
+                elif view_type == 'form':
                     values['icon'] = 'tryton-new'
-                elif view_mode and view_mode.startswith('graph'):
+                elif view_type == 'graph':
                     values['icon'] = 'tryton-graph'
-                elif view_mode and view_mode.startswith('calendar'):
+                elif view_type == 'calendar':
                     values['icon'] = 'tryton-calendar'
             elif action_type == 'ir.action.url':
                 values['icon'] = 'tryton-web-browser'
@@ -106,16 +128,7 @@ class MenuitemTagHandler:
                 values['icon'] = 'tryton-new'
 
         if values.get('groups'):
-            g_names = values['groups'].split(',')
-            groups_value = []
-            for group in g_names:
-                if group.startswith('-'):
-                    group_id = self.mh.get_id(group[1:])
-                    groups_value.append(('remove', group_id))
-                else:
-                    group_id = self.mh.get_id(group)
-                    groups_value.append(('add', group_id))
-            values['groups'] = groups_value
+            raise Exception("Please use separate records for groups")
 
         if not values.get('name'):
             if not action_name:
@@ -124,8 +137,10 @@ class MenuitemTagHandler:
             else:
                 values['name'] = action_name
 
-        self.values = values
+        if values.get('sequence'):
+            values['sequence'] = int(values['sequence'])
 
+        self.values = values
 
     def characters(self, data):
         pass
@@ -135,12 +150,11 @@ class MenuitemTagHandler:
         if name != "menuitem":
             return self
         else:
-            self.mh.import_record( 'ir.ui.menu', self.values, self.xml_id)
+            self.mh.import_record('ir.ui.menu', self.values, self.xml_id)
             return None
 
     def current_state(self):
-        return "Tag menuitem with id: %s"% \
-               (self.xml_id)
+        return "Tag menuitem with id: %s" % self.xml_id
 
 
 class RecordTagHandler:
@@ -160,14 +174,13 @@ class RecordTagHandler:
         self.cdata = None
         self.start_cdata = None
 
-
     def startElement(self, name, attributes):
 
         # Manage the top level tag
         if name == "record":
             self.model = self.mh.pool.get(attributes["model"])
-            assert self.model, "The model %s does not exist !" % \
-                    (attributes["model"],)
+            assert self.model, ("The model %s does not exist !"
+                % (attributes["model"],))
 
             self.xml_id = attributes["id"]
             self.update = bool(int(attributes.get('update', '0')))
@@ -194,25 +207,16 @@ class RecordTagHandler:
                 self.cdata = "start"
 
             # Catch the known attributes
-            search_attr = attributes.get('search','')
+            search_attr = attributes.get('search', '')
             ref_attr = attributes.get('ref', '')
             eval_attr = attributes.get('eval', '')
 
             if search_attr:
-                search_model = self.model._columns[field_name].model_name
-                f_obj = self.mh.pool.get(search_model)
+                search_model = self.model._fields[field_name].model_name
+                SearchModel = self.mh.pool.get(search_model)
                 with Transaction().set_context(active_test=False):
-                    answer = f_obj.browse(f_obj.search(safe_eval(search_attr)))
-
-                if not answer: return
-
-                if self.model._columns[field_name]._type == 'many2many':
-                    self.values[field_name] = [
-                            ('set', [x['id'] for x in answer]),
-                        ]
-
-                elif self.model._columns[field_name]._type == 'many2one':
-                    self.values[field_name] = answer[0]['id']
+                    found, = SearchModel.search(safe_eval(search_attr))
+                    self.values[field_name] = found.id
 
             elif ref_attr:
                 self.values[field_name] = self.mh.get_id(ref_attr)
@@ -241,7 +245,6 @@ class RecordTagHandler:
             self.start_cdata = "inside"
 
         self.values[self.current_field] += data
-
 
     def endElement(self, name):
 
@@ -273,15 +276,16 @@ class RecordTagHandler:
         elif name == "record":
             if self.xml_id in self.xml_ids and not self.update:
                 raise Exception('Duplicate id: "%s".' % (self.xml_id,))
-            self.mh.import_record(self.model._name, self.values, self.xml_id)
+            self.mh.import_record(
+                self.model.__name__, self.values, self.xml_id)
             self.xml_ids.append(self.xml_id)
             return None
         else:
-            raise Exception("Unexpected closing tag '%s'"% (name,))
+            raise Exception("Unexpected closing tag '%s'" % (name,))
 
     def current_state(self):
-        return "In tag record: model %s with id %s."% \
-               (self.model and self.model._name or "?", self.xml_id)
+        return "In tag record: model %s with id %s." % \
+               (self.model and self.model.__name__ or "?", self.xml_id)
 
 
 # Custom exception:
@@ -291,16 +295,17 @@ class Unhandled_field(Exception):
     """
     pass
 
+
 class Fs2bdAccessor:
     """
     Used in TrytondXmlHandler.
     Provide some helper function to ease cache access and management.
     """
 
-    def __init__(self, modeldata_obj, pool):
+    def __init__(self, ModelData, pool):
         self.fs2db = {}
         self.fetched_modules = []
-        self.modeldata_obj = modeldata_obj
+        self.ModelData = ModelData
         self.browserecord = {}
         self.pool = pool
 
@@ -334,35 +339,29 @@ class Fs2bdAccessor:
         if module not in self.fetched_modules:
             return
         self.browserecord[module].setdefault(model_name, {})
-        model_obj = self.pool.get(model_name)
+        Model = self.pool.get(model_name)
         if not ids:
-            object_ids = self.browserecord[module][model_name].keys()
-        else:
-            if isinstance(ids, (int, long)):
-                object_ids = [ids]
-            else:
-                object_ids = ids
-        models = model_obj.browse(object_ids)
+            ids = self.browserecord[module][model_name].keys()
+        models = Model.browse(ids)
         for model in models:
             if model.id in self.browserecord[module][model_name]:
                 for cache in Transaction().cursor.cache.values():
                     for cache in (cache, cache.get('_language_cache',
-                        {}).values()):
-                        if model_name in cache \
-                                and model.id in cache[model_name]:
+                                {}).values()):
+                        if (model_name in cache
+                                and model.id in cache[model_name]):
                             cache[model_name][model.id] = {}
             self.browserecord[module][model_name][model.id] = model
 
     def fetch_new_module(self, module):
         cursor = Transaction().cursor
         self.fs2db[module] = {}
-        module_data_ids = self.modeldata_obj.search([
+        module_data_ids = self.ModelData.search([
                 ('module', '=', module),
-                ('inherit', '=', False),
                 ], order=[('db_id', 'ASC')])
 
         record_ids = {}
-        for rec in self.modeldata_obj.browse(module_data_ids):
+        for rec in self.ModelData.browse(module_data_ids):
             self.fs2db[rec.module][rec.fs_id] = {
                 "db_id": rec.db_id, "model": rec.model,
                 "id": rec.id, "values": rec.values
@@ -376,15 +375,16 @@ class Fs2bdAccessor:
         for model_name in record_ids.keys():
             if model_name not in object_name_list:
                 continue
-            model_obj = self.pool.get(model_name)
+            Model = self.pool.get(model_name)
             self.browserecord[module][model_name] = {}
             for i in range(0, len(record_ids[model_name]), cursor.IN_MAX):
                 sub_record_ids = record_ids[model_name][i:i + cursor.IN_MAX]
                 with Transaction().set_context(active_test=False):
-                    ids = model_obj.search([
+                    records = Model.search([
                         ('id', 'in', sub_record_ids),
                         ])
-                models = model_obj.browse(ids)
+                with Transaction().set_context(language='en_US'):
+                    models = Model.browse(map(int, records))
                 for model in models:
                     self.browserecord[module][model_name][model.id] = model
         self.fetched_modules.append(module)
@@ -392,17 +392,26 @@ class Fs2bdAccessor:
 
 class TrytondXmlHandler(sax.handler.ContentHandler):
 
-    def __init__(self, pool, module,):
+    def __init__(self, pool, module, module_state):
         "Register known taghandlers, and managed tags."
         sax.handler.ContentHandler.__init__(self)
 
         self.pool = pool
         self.module = module
-        self.modeldata_obj = pool.get('ir.model.data')
-        self.fs2db = Fs2bdAccessor(self.modeldata_obj, pool)
+        self.ModelData = pool.get('ir.model.data')
+        self.fs2db = Fs2bdAccessor(self.ModelData, pool)
         self.to_delete = self.populate_to_delete()
         self.noupdate = None
+        self.module_state = module_state
+        self.grouped = None
+        self.grouped_creations = defaultdict(dict)
+        self.grouped_write = defaultdict(list)
+        self.grouped_model_data = []
         self.skip_data = False
+        Module = pool.get('ir.module.module')
+        self.installed_modules = [m.name for m in Module.search([
+                    ('state', 'in', ['installed', 'to upgrade']),
+                    ])]
 
         # Tag handlders are used to delegate the processing
         self.taghandlerlist = {
@@ -420,7 +429,6 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
         self.sax_parser.setFeature(sax.handler.feature_namespaces, 0)
         self.sax_parser.setContentHandler(self)
 
-
     def parse_xmlstream(self, stream):
         """
         Take a byte stream has input and parse the xml content.
@@ -433,10 +441,7 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
             self.sax_parser.parse(source)
         except Exception:
             logging.getLogger("convert").error(
-                "Error while parsing xml file:\n" +\
-                    self.current_state()
-                )
-
+                "Error while parsing xml file:\n" + self.current_state())
             raise
         return self.to_delete
 
@@ -446,24 +451,30 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
 
         if not self.taghandler:
 
-            if  name in self.taghandlerlist:
+            if name in self.taghandlerlist:
                 self.taghandler = self.taghandlerlist[name]
                 self.taghandler.startElement(name, attributes)
 
             elif name == "data":
                 self.noupdate = bool(int(attributes.get("noupdate", '0')))
+                self.grouped = bool(int(attributes.get('grouped', 0)))
                 if self.pool.test and \
                         bool(int(attributes.get("skiptest", '0'))):
                     self.skip_data = True
                 else:
                     self.skip_data = False
+                depends = attributes.get('depends', '').split(',')
+                depends = [m.strip() for m in depends if m]
+                if depends:
+                    if not all((m in self.installed_modules for m in depends)):
+                        self.skip_data = True
 
             elif name == "tryton":
                 pass
 
             else:
-                logging.getLogger("convert").info( "Tag %s not supported" %
-                        name)
+                logging.getLogger("convert").info("Tag %s not supported" %
+                    name)
                 return
         elif not self.skip_data:
             self.taghandler.startElement(name, attributes)
@@ -474,10 +485,24 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
 
     def endElement(self, name):
 
+        if name == 'data' and self.grouped:
+            for model, values in self.grouped_creations.iteritems():
+                self.create_records(model, values.values(), values.keys())
+            self.grouped_creations.clear()
+            for key, actions in self.grouped_write.iteritems():
+                module, model = key
+                self.write_records(module, model, *actions)
+            self.grouped_write.clear()
+        if self.grouped_model_data:
+            self.ModelData.write(*self.grouped_model_data)
+            del self.grouped_model_data[:]
+
         # Closing tag found, if we are in a delegation the handler
         # know what to do:
         if self.taghandler and not self.skip_data:
             self.taghandler = self.taghandler.endElement(name)
+        if self.taghandler == self.taghandlerlist.get(name):
+            self.taghandler = None
 
     def current_state(self):
         if self.taghandler:
@@ -493,33 +518,30 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
             module = self.module
 
         if self.fs2db.get(module, xml_id) is None:
-            raise Exception("Reference to %s not found"% \
-                                ".".join([module,xml_id]))
+            raise Exception("Reference to %s not found"
+                % ".".join([module, xml_id]))
         return self.fs2db.get(module, xml_id)["db_id"]
 
-
-
     @staticmethod
-    def _clean_value(key, browse_record, object_ref):
+    def _clean_value(key, record):
         """
         Take a field name, a browse_record, and a reference to the
         corresponding object.  Return a raw value has it must look on the
         db.
         """
-
+        Model = record.__class__
         # search the field type in the object or in a parent
-        if key in object_ref._columns:
-            field_type = object_ref._columns[key]._type
-        else:
-            field_type = object_ref._inherit_fields[key][2]._type
+        field_type = Model._fields[key]._type
 
         # handle the value regarding to the type
         if field_type == 'many2one':
-            return browse_record[key] and browse_record[key].id or False
+            return getattr(record, key).id if getattr(record, key) else None
         elif field_type == 'reference':
-            if not browse_record[key]:
-                return False
-            ref_mode, ref_id = browse_record[key].split(',', 1)
+            if not getattr(record, key):
+                return None
+            elif not isinstance(getattr(record, key), basestring):
+                return str(getattr(record, key))
+            ref_mode, ref_id = getattr(record, key).split(',', 1)
             try:
                 ref_id = safe_eval(ref_id)
             except Exception:
@@ -528,10 +550,9 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
                 ref_id = ref_id[0]
             return ref_mode + ',' + str(ref_id)
         elif field_type in ['one2many', 'many2many']:
-            raise Unhandled_field()
+            raise Unhandled_field("Unhandled field %s" % key)
         else:
-            return browse_record[key]
-
+            return getattr(record, key)
 
     def populate_to_delete(self):
         """Create a list of all the records that whe should met in the update
@@ -540,32 +561,29 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
 
         # Fetch the data in id descending order to avoid depedendcy
         # problem when the corresponding recordds will be deleted:
-        module_data_ids = self.modeldata_obj.search([
+        module_data = self.ModelData.search([
                 ('module', '=', self.module),
-                ('inherit', '=', False),
                 ], order=[('id', 'DESC')])
-        return set(rec.fs_id for rec in self.modeldata_obj.browse(
-            module_data_ids))
+        return set(rec.fs_id for rec in module_data)
 
     def import_record(self, model, values, fs_id):
-        cursor = Transaction().cursor
         module = self.module
 
         if not fs_id:
             raise Exception('import_record : Argument fs_id is mandatory')
 
         if '.' in fs_id:
-            assert len(fs_id.split('.')) == 2, '"%s" contains too many dots. '\
-                    'file system ids should contain ot most one dot ! ' \
-                    'These are used to refer to other modules data, ' \
-                    'as in module.reference_id' % (fs_id)
+            assert len(fs_id.split('.')) == 2, ('"%s" contains too many dots. '
+                'file system ids should contain ot most one dot ! '
+                'These are used to refer to other modules data, '
+                'as in module.reference_id' % (fs_id))
 
             module, fs_id = fs_id.split('.')
             if not self.fs2db.get(module, fs_id):
-                raise Exception('Reference to %s.%s not found' % \
-                        (module, fs_id))
+                raise Exception('Reference to %s.%s not found'
+                    % (module, fs_id))
 
-        object_ref = self.pool.get(model)
+        Model = self.pool.get(model)
 
         if self.fs2db.get(module, fs_id):
 
@@ -574,16 +592,14 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
             if module == self.module and fs_id in self.to_delete:
                 self.to_delete.remove(fs_id)
 
-            if self.noupdate:
+            if self.noupdate and self.module_state != 'to install':
                 return
 
             # this record is already in the db:
             # XXX maybe use only one call to get()
-            db_id, db_model, mdata_id, old_values = \
-                    [self.fs2db.get(module, fs_id)[x] for x in \
-                    ["db_id","model","id","values"]]
-            inherit_db_ids = {}
-            inherit_mdata_ids = []
+            db_id, db_model, mdata_id, old_values = [
+                self.fs2db.get(module, fs_id)[x]
+                for x in ["db_id", "model", "id", "values"]]
 
             if not old_values:
                 old_values = {}
@@ -599,107 +615,38 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
                     old_values[key] = old_values[key].decode('utf-8')
 
             if model != db_model:
-                raise Exception("This record try to overwrite " \
-                "data with the wrong model: %s (module: %s)" % (fs_id, module))
+                raise Exception("This record try to overwrite "
+                    "data with the wrong model: %s (module: %s)"
+                    % (fs_id, module))
 
+            record = self.fs2db.get_browserecord(module, Model.__name__, db_id)
             #Re-create record if it was deleted
-            if not self.fs2db.get_browserecord(module, object_ref._name, db_id):
-                with Transaction().set_context(module=module):
-                    db_id = object_ref.create(values)
+            if not record:
+                with Transaction().set_context(
+                        module=module, language='en_US'):
+                    record, = Model.create([values])
 
                 # reset_browsercord
-                self.fs2db.reset_browsercord(module, object_ref._name, db_id)
+                self.fs2db.reset_browsercord(
+                    module, Model.__name__, [record.id])
 
-                record = self.fs2db.get_browserecord(module, object_ref._name,
-                        db_id)
-                for table, field_name, field in \
-                        object_ref._inherit_fields.values():
-                    inherit_db_ids[table] = record[field_name].id
+                record = self.fs2db.get_browserecord(
+                    module, Model.__name__, record.id)
 
-                #Add a translation record for field translatable
-                for field_name in object_ref._columns.keys() + \
-                        object_ref._inherit_fields.keys():
-                    if field_name in object_ref._columns:
-                        field = object_ref._columns[field_name]
-                        table_name = object_ref._name
-                        res_id = db_id
-                    else:
-                        field = object_ref._inherit_fields[field_name][2]
-                        table_name = self.pool.get(
-                                object_ref._inherit_fields[field_name][0])._name
-                        res_id = inherit_db_ids[table_name]
-                    if getattr(field, 'translate', False) and \
-                            values.get(field_name):
-                        cursor.execute('SELECT id FROM ir_translation ' \
-                                'WHERE name = %s ' \
-                                    'AND lang = %s ' \
-                                    'AND type = %s ' \
-                                    'AND res_id = %s ' \
-                                    'AND module = %s',
-                                (table_name + ',' + field_name,
-                                    'en_US', 'model', res_id, module))
-                        fetchone = cursor.fetchone()
-                        if fetchone:
-                            trans_id = fetchone[0]
-                            cursor.execute('UPDATE ir_translation ' \
-                                    'SET src = %s, module = %s ' \
-                                    'WHERE id = %s',
-                                    (values[field_name], module, trans_id))
-                        else:
-                            cursor.execute('INSERT INTO ir_translation ' \
-                                    '(name, lang, type, src, res_id, ' \
-                                        'value, module, fuzzy) ' \
-                                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                                    (table_name + ',' + field_name,
-                                        'en_US', 'model', values[field_name],
-                                        res_id, '', module, False))
-
-                for table in inherit_db_ids.keys():
-                    data_id = self.modeldata_obj.search([
-                        ('fs_id', '=', fs_id),
-                        ('module', '=', module),
-                        ('model', '=', table),
-                        ], limit=1)
-                    if data_id:
-                        self.modeldata_obj.write(data_id, {
-                            'db_id': inherit_db_ids[table],
-                            'inherit': True,
-                            })
-                    else:
-                        data_id = self.modeldata_obj.create({
-                            'fs_id': fs_id,
-                            'module': module,
-                            'model': table,
-                            'db_id': inherit_db_ids[table],
-                            'inherit': True,
-                            })
-                    inherit_mdata_ids.append((table, data_id))
-
-                data_id = self.modeldata_obj.search([
+                data = self.ModelData.search([
                     ('fs_id', '=', fs_id),
                     ('module', '=', module),
-                    ('model', '=', object_ref._name),
-                    ], limit=1)[0]
-                self.modeldata_obj.write(data_id, {
-                    'db_id': db_id,
+                    ('model', '=', Model.__name__),
+                    ], limit=1)
+                self.ModelData.write(data, {
+                    'db_id': record.id,
                     })
-                self.fs2db.get(module, fs_id)["db_id"] = db_id
-
-            db_val = self.fs2db.get_browserecord(module, object_ref._name,
-                    db_id)
-            if not db_val:
-                db_val = object_ref.browse(db_id)
+                self.fs2db.get(module, fs_id)["db_id"] = record.id
 
             to_update = {}
             for key in values:
 
-                try:
-                    db_field = self._clean_value(key, db_val, object_ref)
-                except Unhandled_field:
-                    logging.getLogger("convert").info(
-                        'Field %s on %s : integrity not tested.'%(key, model))
-                    to_update[key] = values[key]
-                    continue
+                db_field = self._clean_value(key, record)
 
                 # if the fs value is the same has in the db, whe ignore it
                 val = values[key]
@@ -711,16 +658,17 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
 
                 # we cannot update a field if it was changed by a user...
                 if key not in old_values:
-                    if key in object_ref._columns:
-                        expected_value = object_ref._defaults.get(
-                            key, lambda *a: None)()
-                    else:
-                        inherit_obj = self.pool.get(
-                            object_ref._inherit_fields[key][0])
-                        expected_value = inherit_obj._defaults.get(
-                            key, lambda *a: None)()
+                    expected_value = Model._defaults.get(key,
+                        lambda *a: None)()
                 else:
                     expected_value = old_values[key]
+
+                # Migration from 2.0: Reference field change value
+                field_type = Model._fields[key]._type
+                if field_type == 'reference':
+                    if (expected_value and expected_value.endswith(',0')
+                            and not db_field):
+                        db_field = expected_value
 
                 # ... and we consider that there is an update if the
                 # expected value differs from the actual value, _and_
@@ -728,205 +676,111 @@ class TrytondXmlHandler(sax.handler.ContentHandler):
                 # False, {} or [])
                 if db_field != expected_value and (db_field or expected_value):
                     logging.getLogger("convert").warning(
-                        "Field %s of %s@%s not updated (id: %s), because "\
-                        "it has changed since the last update"% \
-                        (key, db_id, model, fs_id))
+                        "Field %s of %s@%s not updated (id: %s), because "
+                        "it has changed since the last update"
+                        % (key, record.id, model, fs_id))
                     continue
 
                 # so, the field in the fs and in the db are different,
                 # and no user changed the value in the db:
                 to_update[key] = values[key]
 
-            # if there is values to update:
-            if to_update:
-                # write the values in the db:
-                with Transaction().set_context(module=module):
-                    object_ref.write(db_id, to_update)
-                self.fs2db.reset_browsercord(module, object_ref._name, db_id)
+            if self.grouped:
+                self.grouped_write[(module, model)].extend(
+                    (record, to_update, old_values, fs_id, mdata_id))
+            else:
+                self.write_records(module, model, record, to_update,
+                    old_values, fs_id, mdata_id)
+        else:
+            if self.grouped:
+                self.grouped_creations[model][fs_id] = values
+            else:
+                self.create_records(model, [values], [fs_id])
 
+    def create_records(self, model, vlist, fs_ids):
+        Model = self.pool.get(model)
 
-            if not inherit_db_ids:
-                record = object_ref.browse(db_id)
-                for table, field_name, field in \
-                        object_ref._inherit_fields.values():
-                    inherit_db_ids[table] = record[field_name].id
-            if not inherit_mdata_ids:
-                for table in inherit_db_ids.keys():
-                    data_id = self.modeldata_obj.search([
-                        ('fs_id', '=', fs_id),
-                        ('module', '=', module),
-                        ('model', '=', table),
-                        ], limit=1)
-                    inherit_mdata_ids.append((table, data_id))
+        with Transaction().set_context(module=self.module, language='en_US'):
+            records = Model.create(vlist)
 
-            #Update/Create translation record for field translatable
-            if to_update:
-                for field_name in object_ref._columns.keys() + \
-                        object_ref._inherit_fields.keys():
-                    if field_name in object_ref._columns:
-                        field = object_ref._columns[field_name]
-                        table_name = object_ref._name
-                        res_id = db_id
-                    else:
-                        field = object_ref._inherit_fields[field_name][2]
-                        table_name = self.pool.get(
-                                object_ref._inherit_fields[field_name][0])._name
-                        res_id = inherit_db_ids[table_name]
-                    if getattr(field, 'translate', False):
-                        cursor.execute('SELECT id FROM ir_translation ' \
-                                'WHERE name = %s ' \
-                                    'AND lang = %s ' \
-                                    'AND type = %s ' \
-                                    'AND res_id = %s ' \
-                                    'AND module = %s',
-                                (table_name + ',' + field_name,
-                                    'en_US', 'model', res_id, module))
-                        fetchone = cursor.fetchone()
-                        if fetchone:
-                            if to_update.get(field_name):
-                                trans_id = fetchone[0]
-                                cursor.execute('UPDATE ir_translation ' \
-                                        'SET src = %s, module = %s ' \
-                                        'WHERE id = %s',
-                                        (to_update[field_name], module,
-                                            trans_id))
-                        elif values.get(field_name):
-                            cursor.execute('INSERT INTO ir_translation ' \
-                                    '(name, lang, type, src, res_id, ' \
-                                        'value, module, fuzzy) ' \
-                                    'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                                    (table_name + ',' + field_name,
-                                        'en_US', 'model', values[field_name],
-                                        res_id, '', module, False))
+        mdata_values = []
+        for record, values, fs_id in izip(records, vlist, fs_ids):
+            for key in values:
+                values[key] = self._clean_value(key, record)
 
-            if to_update:
-                # re-read it: this ensure that we store the real value
-                # in the model_data table:
-                db_val = self.fs2db.get_browserecord(module, object_ref._name,
-                        db_id)
-                if not db_val:
-                    db_val = object_ref.browse(db_id)
-                for key in to_update:
-                    try:
-                        values[key] = self._clean_value(
-                            key, db_val, object_ref)
-                    except Unhandled_field:
-                        continue
-
-            if module != self.module:
-                temp_values = old_values.copy()
-                temp_values.update(values)
-                values = temp_values
-
-            if values != old_values:
-                self.modeldata_obj.write(mdata_id, {
+            mdata_values.append({
                     'fs_id': fs_id,
                     'model': model,
-                    'module': module,
-                    'db_id': db_id,
-                    'values': values,
-                    'date_update': datetime.datetime.now(),
-                    })
-                for table, inherit_mdata_id in inherit_mdata_ids:
-                    self.modeldata_obj.write(inherit_mdata_id, {
-                        'fs_id': fs_id,
-                        'model': table,
-                        'module': module,
-                        'db_id': inherit_db_ids[table],
-                        'values': values,
-                        'date_update': datetime.datetime.now(),
-                        })
-            # reset_browsercord to keep cache memory low
-            self.fs2db.reset_browsercord(module, object_ref._name, db_id)
-
-        else:
-            # this record is new, create it in the db:
-            with Transaction().set_context(module=module):
-                db_id = object_ref.create(values)
-            inherit_db_ids = {}
-
-            record = object_ref.browse(db_id)
-            for table, field_name, field in object_ref._inherit_fields.values():
-                inherit_db_ids[table] = record[field_name].id
-
-            #Add a translation record for field translatable
-            for field_name in object_ref._columns.keys() + \
-                    object_ref._inherit_fields.keys():
-                if field_name in object_ref._columns:
-                    field = object_ref._columns[field_name]
-                    table_name = object_ref._name
-                    res_id = db_id
-                else:
-                    field = object_ref._inherit_fields[field_name][2]
-                    table_name = self.pool.get(
-                            object_ref._inherit_fields[field_name][0])._name
-                    res_id = inherit_db_ids[table_name]
-                if getattr(field, 'translate', False) and \
-                        values.get(field_name):
-                    cursor.execute('SELECT id FROM ir_translation ' \
-                            'WHERE name = %s' \
-                                'AND lang = %s ' \
-                                'AND type = %s ' \
-                                'AND res_id = %s ' \
-                                'AND module = %s',
-                            (table_name + ',' + field_name,
-                                'en_US', 'model', res_id, module))
-                    trans_id = None
-                    if cursor.rowcount == -1 or cursor.rowcount is None:
-                        data = cursor.fetchone()
-                        if data:
-                            trans_id, = data
-                    elif cursor.rowcount != 0:
-                        trans_id, = cursor.fetchone()
-                    if trans_id:
-                        cursor.execute('UPDATE ir_translation ' \
-                                'SET src = %s, module = %s ' \
-                                'WHERE id = %s',
-                                (values[field_name], module, trans_id))
-                    else:
-                        cursor.execute('INSERT INTO ir_translation ' \
-                                '(name, lang, type, src, res_id, ' \
-                                    'value, module, fuzzy) ' \
-                                'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
-                                (table_name + ',' + field_name,
-                                    'en_US', 'model', values[field_name],
-                                    res_id, '', module, False))
-
-            # re-read it: this ensure that we store the real value
-            # in the model_data table:
-            db_val = object_ref.browse(db_id)
-            for key in values:
-                try:
-                    values[key] = self._clean_value(key, db_val,
-                            object_ref)
-                except Unhandled_field:
-                    continue
-
-            for table in inherit_db_ids.keys():
-                self.modeldata_obj.create({
-                    'fs_id': fs_id,
-                    'model': table,
-                    'module': module,
-                    'db_id': inherit_db_ids[table],
+                    'module': self.module,
+                    'db_id': record.id,
                     'values': str(values),
-                    'inherit': True,
                     'noupdate': self.noupdate,
                     })
 
-            mdata_id = self.modeldata_obj.create({
-                'fs_id': fs_id,
-                'model': model,
-                'module': module,
-                'db_id': db_id,
-                'values': str(values),
-                'noupdate': self.noupdate,
-                })
+        models_data = self.ModelData.create(mdata_values)
 
-            # update fs2db:
-            self.fs2db.set(module, fs_id, {
-                    "db_id": db_id, "model": model,
-                    "id": mdata_id, "values": str(values)})
-            self.fs2db.reset_browsercord(module, model, db_id)
+        for record, values, fs_id, mdata in izip(
+                records, vlist, fs_ids, models_data):
+            self.fs2db.set(self.module, fs_id, {
+                    'db_id': record.id,
+                    'model': model,
+                    'id': mdata.id,
+                    'values': str(values),
+                    })
+        self.fs2db.reset_browsercord(self.module, model,
+            [r.id for r in records])
+
+    def write_records(self, module, model,
+            record, values, old_values, fs_id, mdata_id, *args):
+        args = (record, values, old_values, fs_id, mdata_id) + args
+        Model = self.pool.get(model)
+
+        actions = iter(args)
+        to_update = []
+        for record, values, _, _, _ in zip(*((actions,) * 5)):
+            if values:
+                to_update += [[record], values]
+        # if there is values to update:
+        if to_update:
+            # write the values in the db:
+            with Transaction().set_context(
+                    module=module, language='en_US'):
+                Model.write(*to_update)
+            self.fs2db.reset_browsercord(
+                module, Model.__name__, sum(to_update[::2], []))
+
+        actions = iter(to_update)
+        for records, values in zip(actions, actions):
+            record, = records
+            # re-read it: this ensure that we store the real value
+            # in the model_data table:
+            record = self.fs2db.get_browserecord(
+                module, Model.__name__, record.id)
+            if not record:
+                record = Model(record.id)
+            for key in values:
+                values[key] = self._clean_value(key, record)
+
+        actions = iter(args)
+        for record, values, old_values, fs_id, mdata_id in zip(
+                *((actions,) * 5)):
+            temp_values = old_values.copy()
+            temp_values.update(values)
+            values = temp_values
+
+            if values != old_values:
+                self.grouped_model_data.extend(([self.ModelData(mdata_id)], {
+                            'fs_id': fs_id,
+                            'model': model,
+                            'module': module,
+                            'db_id': record.id,
+                            'values': str(values),
+                            'date_update': datetime.datetime.now(),
+                            }))
+
+        # reset_browsercord to keep cache memory low
+        self.fs2db.reset_browsercord(module, Model.__name__, args[::5])
+
 
 def post_import(pool, module, to_delete):
     """
@@ -934,69 +788,26 @@ def post_import(pool, module, to_delete):
     """
     cursor = Transaction().cursor
     mdata_delete = []
-    modeldata_obj = pool.get("ir.model.data")
-    transition_delete = []
+    ModelData = pool.get("ir.model.data")
 
     with Transaction().set_context(active_test=False):
-        mdata_ids = modeldata_obj.search([
+        mdata = ModelData.search([
             ('fs_id', 'in', to_delete),
             ('module', '=', module),
             ], order=[('id', 'DESC')])
 
     object_name_list = set(pool.object_name_list())
-    for mrec in modeldata_obj.browse(mdata_ids):
-        mdata_id, model, db_id = mrec.id, mrec.model, mrec.db_id
-
-        # Whe skip transitions, they will be deleted with the
-        # corresponding activity:
-        if model == 'workflow.transition':
-            transition_delete.append((mdata_id, db_id))
-            continue
-
-        if model == 'workflow.activity':
-
-            wkf_todo = []
-            # search for records that are in the state/activity that
-            # we want to delete...
-            cursor.execute('SELECT res_type, res_id ' \
-                    'FROM wkf_instance ' \
-                    'WHERE id IN (' \
-                        'SELECT instance FROM wkf_workitem ' \
-                        'WHERE activity = %s)', (db_id,))
-            #... connect the transitions backward...
-            wkf_todo.extend(cursor.fetchall())
-            cursor.execute("UPDATE wkf_transition " \
-                    'SET condition = \'True\', "group" = NULL, ' \
-                        "signal = NULL, act_to = act_from, " \
-                        "act_from = %s " \
-                    "WHERE act_to = %s", (db_id, db_id))
-            # ... and force the record to follow them:
-            for wkf_model, wkf_model_id in wkf_todo:
-                model_obj = pool.get(wkf_model)
-                #XXX must perhaps use workflow_trigger_trigger?
-                model_obj.workflow_trigger_write(wkf_model_id)
-
-            # Collect the ids of these transition in model_data
-            cursor.execute(
-                "SELECT md.id FROM ir_model_data md " \
-                    "JOIN wkf_transition t ON "\
-                    "(md.model='workflow.transition' and md.db_id=t.id)" \
-                    "WHERE t.act_to = %s", (db_id,))
-            mdata_delete.extend([x[0] for x in cursor.fetchall()])
-
-            # And finally delete the transitions
-            cursor.execute("DELETE FROM wkf_transition " \
-                    "WHERE act_to = %s", (db_id,))
-
+    for mrec in mdata:
+        model, db_id = mrec.model, mrec.db_id
 
         logging.getLogger("convert").info(
                 'Deleting %s@%s' % (db_id, model))
         try:
             # Deletion of the record
             if model in object_name_list:
-                model_obj = pool.get(model)
-                model_obj.delete(db_id)
-                mdata_delete.append(mdata_id)
+                Model = pool.get(model)
+                Model.delete([Model(db_id)])
+                mdata_delete.append(mrec)
             else:
                 logging.getLogger("convert").warning(
                         'Could not delete id %d of model %s because model no '
@@ -1004,8 +815,7 @@ def post_import(pool, module, to_delete):
             cursor.commit()
         except Exception:
             cursor.rollback()
-            tb_s = reduce(lambda x, y: x + y,
-                    traceback.format_exception(*sys.exc_info()))
+            tb_s = ''.join(traceback.format_exception(*sys.exc_info()))
             logging.getLogger("convert").error(
                 'Could not delete id: %d of model %s\n'
                     'There should be some relation '
@@ -1013,25 +823,15 @@ def post_import(pool, module, to_delete):
                     'You should manually fix this '
                     'and restart --update=module\n'
                     'Exception: %s' %
-                    (db_id, model, tb_s.decode('utf-8', 'ignore')))
-
-    transition_obj = pool.get('workflow.transition')
-    for mdata_id, db_id in transition_delete:
-        logging.getLogger("convert").info(
-            'Deleting %s@workflow.transition' % (db_id,))
-        try:
-            transition_obj.delete(db_id)
-            mdata_delete.append(mdata_id)
-            cursor.commit()
-        except Exception:
-            cursor.rollback()
-            logging.getLogger("convert").error(
-                'Could not delete id: %d of model workflow.transition' %
-                (db_id,))
+                    (db_id, model, tb_s))
+            if 'active' in Model._fields:
+                Model.write([Model(db_id)], {
+                        'active': False,
+                        })
 
     # Clean model_data:
     if mdata_delete:
-        modeldata_obj.delete(mdata_delete)
+        ModelData.delete(mdata_delete)
         cursor.commit()
 
     return True

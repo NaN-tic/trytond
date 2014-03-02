@@ -5,38 +5,22 @@
 Model
 =====
 
-.. class:: Model
+.. class:: Model([id[, \**kwargs]])
 
 This is the base class that every kind of :ref:`model <topics-models>`
 inherits. It defines common attributes of all models.
 
 Class attributes are:
 
-.. attribute:: Model._name
+.. attribute:: Model.__name__
 
     It contains the a unique name to reference the model throughout the
     platform.
 
-.. attribute:: Model._inherits
+.. attribute:: Model.__rpc__
 
-    It contains a dictionary with one or more :attr:`Model._name` as keys. For each
-    key a :class:`~trytond.model.fields.Many2One` field is defined as value. The
-    :class:`trytond.model.fields.Many2One` fields must be defined in the the current
-    model fields. A referenced model with ``_inherits`` is a generalization_ of the
-    current model which is *specialized*. In the specialized model it is possible to
-    interact with all attributes and methods of the general model.
-
-    .. _generalization: http://en.wikipedia.org/wiki/Class_diagram#Generalization
-
-.. attribute:: Model._description
-
-    It contains a description of the model.
-
-.. attribute:: Model._rpc
-
-    It contains a dictionary with method name as key and a boolean as value. If
-    a method name is in the dictionary then it is allowed to call it remotely.
-    If the value is ``True`` then the transaction will be committed.
+    It contains a dictionary with method name as key and an instance of
+    :class:`trytond.rpc.RPC` as value.
 
 .. attribute:: Model._error_messages
 
@@ -57,13 +41,21 @@ Class attributes are:
 
     The definition of the field ``id`` of records.
 
-Instance methods:
+Class methods:
 
-.. method:: Model.init(module_name)
+.. classmethod:: Model.__setup__()
+
+    Setup the class before adding into the :class:`trytond.pool.Pool`.
+
+.. classmethod:: Model.__post_setup__()
+
+    Setup the class after added into the :class:`trytond.pool.Pool`.
+
+.. classmethod:: Model.__register__(module_name)
 
     Registers the model in ``ir.model`` and ``ir.model.field``.
 
-.. method:: Model.raise_user_error(error[, error_args[, error_description[, error_description_args[, raise_exception]]]])
+.. classmethod:: Model.raise_user_error(error[, error_args[, error_description[, error_description_args[, raise_exception]]]])
 
     Raises an exception that will be displayed as an error message in the
     client.  ``error`` is the key of the error message in ``_error_messages``
@@ -72,7 +64,7 @@ Instance methods:
     The boolean ``raise_exception`` can be set to ``False`` to retrieve the
     error message strings.
 
-.. method:: Model.raise_user_warning(warning_name, warning[, warning_args[, warning_description[, warning_description_args]]])
+.. classmethod:: Model.raise_user_warning(warning_name, warning[, warning_args[, warning_description[, warning_description_args]]])
 
     Raises an exception that will be displayed as a warning message on the
     client, if the user has not yet bypassed it. ``warning_name`` is used to
@@ -84,16 +76,23 @@ Instance methods:
         warning states by users.
     ..
 
-.. method:: Model.default_get(fields_names[, with_rec_name])
+.. classmethod:: Model.default_get(fields_names[, with_rec_name[, with_on_change]])
 
     Return a dictionary with the default values for each field in
     ``fields_names``. Default values are defined by the returned value of each
     instance method with the pattern ``default_`field_name`()``.
     ``with_rec_name`` allow to add `rec_name` value for each many2one field.
+    ``with_on_change`` allow to add ``on_change`` value for each default value.
 
-.. method:: Model.fields_get([fields_names])
+.. classmethod:: Model.fields_get([fields_names])
 
     Return the definition of each field on the model.
+
+Instance methods:
+
+.. method:: Model.pre_validate()
+
+    This method is called by the client to validate the instance.
 
 =========
 ModelView
@@ -103,9 +102,28 @@ ModelView
 
 It adds requirements to display a view of the model in the client.
 
-Instance methods:
+Class attributes:
 
-.. method:: ModelView.fields_view_get([view_id[, view_type[, toolbar[, hexmd5]]]])
+.. attribute:: ModelView._buttons
+
+    It contains a dictionary with button name as key and the states dictionary
+    for the button. This states dictionary will be used to generate the views
+    containing the button.
+
+Static methods:
+
+.. staticmethod:: ModelView.button
+
+    Decorate button method to check group access.
+
+.. staticmethod:: ModelView.button_action(action)
+
+    Same as :meth:`ModelView.button` but return the action id of the XML `id`
+    action.
+
+Class methods:
+
+.. classmethod:: ModelView.fields_view_get([view_id[, view_type[, toolbar]]])
 
     Return a view definition used by the client. The definition is::
 
@@ -128,13 +146,18 @@ Instance methods:
                     ...
                 ],
             },
-            ''md5': {
-            },
         }
 
-.. method:: ModelView.view_header_get(value[, view_type])
+.. classmethod:: ModelView.view_toolbar_get()
 
-    Return the window title used by the client for the specific view type.
+    Returns the model specific actions in a dictionary with keys:
+        - `print`: a list of available reports
+        - `action`: a list of available actions
+        - `relate`: a list of available relations
+
+.. classmethod:: ModelView.view_header_get(value[, view_type])
+
+    Returns the window title used by the client for the specific view type.
 
 ============
 ModelStorage
@@ -178,129 +201,141 @@ Class attributes are:
 
 .. attribute:: ModelStorage._constraints
 
+    .. warning::
+        Deprecated, use :class:`trytond.model.ModelStorage.validate` instead.
+
     The list of constraints that each record must respect. The definition is:
 
         [ ('function name', 'error keyword'), ... ]
 
-    where ``function name`` is the name of an instance method of the class
+    where ``function name`` is the name of an instance or a class method of the
     which must return a boolean (``False`` when the constraint is violated) and
-    ``error keyword`` is a key of
-    :attr:`Model._error_messages`.
+    ``error keyword`` is a key of :attr:`Model._error_messages`.
 
-Instance methods:
+Static methods:
 
-.. method:: ModelStorage.default_create_uid()
+.. staticmethod:: ModelStorage.default_create_uid()
 
     Return the default value for :attr:`create_uid`.
 
-.. method:: ModelStorage.default_create_date()
+.. staticmethod:: ModelStorage.default_create_date()
 
     Return the default value for :attr:`create_date`.
 
-.. method:: ModelStorage.create(values)
+CLass methods:
 
-    Create a record. ``values`` is a dictionary with fields names as key and
-    created values as value.
+.. classmethod:: ModelStorage.create(vlist)
 
-.. method:: ModelStorage.trigger_create(id)
+    Create records. ``vlist`` is list of dictionaries with fields names as key
+    and created values as value and return the list of new instances.
+
+.. classmethod:: ModelStorage.trigger_create(records)
 
     Trigger create actions. It will call actions defined in ``ir.trigger`` if
     ``on_create`` is set and ``condition`` is true.
 
-.. method:: ModelStorage.read(ids[, fields_names])
+.. classmethod:: ModelStorage.read(ids[, fields_names])
 
-    Return values for the ids. If ``fields_names`` is set, there will be only
-    values for these fields otherwise it will be for all fields.
-    If ``ids`` is a list of ids, the returned value will be a list of
-    dictionaries.
-    If ``ids`` is an integer, the returned value will be a dictionary.
+    Return a list of values for the ids. If ``fields_names`` is set, there will
+    be only values for these fields otherwise it will be for all fields.
 
-.. method:: ModelStorage.write(ids, values)
+.. classmethod:: ModelStorage.write(records, values, [[records, values], ...])
 
-    Write ``values`` on records. ``ids`` can be a list of ids or an id.
-    ``values`` is a dictionary with fields names as key and writen values as
-    value.
+    Write ``values`` on the list of records.  ``values`` is a dictionary with
+    fields names as key and writen values as value.
 
-.. method:: ModelStorage.trigger_write_get_eligibles(ids)
+.. classmethod:: ModelStorage.trigger_write_get_eligibles(records)
 
-    Return eligible record ids for write actions by triggers. This dictionary
-    is to pass to :method:`~ModelStorage.trigger_write`.
+    Return eligible records for write actions by triggers. This dictionary
+    is to pass to :meth:`~ModelStorage.trigger_write`.
 
-.. method:: ModelStorage.trigger_write(eligibles)
+.. classmethod:: ModelStorage.trigger_write(eligibles)
 
     Trigger write actions. It will call actions defined in ``ir.trigger`` if
     ``on_write`` is set and ``condition`` was false before
-    :method:`~ModelStorage.write` and true after.
+    :meth:`~ModelStorage.write` and true after.
 
-.. method:: ModelStorage.delete(ids)
+.. classmethod:: ModelStorage.delete(records)
 
-    Delete records. ``ids`` can be a list of ids or an id.
+    Delete records.
 
-.. method:: ModelStorage.trigger_delete(ids)
+.. classmethod:: ModelStorage.trigger_delete(records)
 
     Trigger delete actions. It will call actions defined in ``ir.trigger`` if
     ``on_delete`` is set and ``condition`` is true.
 
-.. method:: ModelStorage.copy(ids[, default])
+.. classmethod:: ModelStorage.copy(records[, default])
 
-    Duplicate the records. ``ids`` can be a list of ids or an id. ``default``
-    is a dictionary of default value for the created records.
+    Duplicate the records. ``default`` is a dictionary of default value for the
+    created records.
 
-.. method:: ModelStorage.search(domain[, offset[, limit[, order[, count]]]])
+.. classmethod:: ModelStorage.search(domain[, offset[, limit[, order[, count]]]])
 
-    Return a list of ids that match the :ref:`domain <topics-domain>`.
+    Return a list of records that match the :ref:`domain <topics-domain>`.
 
-.. method:: ModelStorage.search_count(domain)
+.. classmethod:: ModelStorage.search_count(domain)
 
     Return the number of records that match the :ref:`domain <topics-domain>`.
 
-.. method:: ModelStorage.search_read(domain[, offset[, limit[, order[, fields_names]]]])
+.. classmethod:: ModelStorage.search_read(domain[, offset[, limit[, order[, fields_names]]]])
 
     Call :meth:`search` and :meth:`read` at once.
     Useful for the client to reduce the number of calls.
 
-.. method:: ModelStorage.get_rec_name(ids, name)
-
-    Getter for the :class:`trytond.model.fields.Function` field
-    :attr:`rec_name`.
-
-.. method:: ModelStorage.search_rec_name(name, clause)
+.. classmethod:: ModelStorage.search_rec_name(name, clause)
 
     Searcher for the :class:`trytond.model.fields.Function` field
     :attr:`rec_name`.
 
-.. method:: ModelStorage.browse(ids)
+.. classmethod:: ModelStorage.search_global(cls, text)
 
-    Return a :class:`BrowseRecordList` or a :class:`BrowseRecord` for the ``ids``.
+    Yield tuples (id, rec_name, icon) for records matching text.
+    It is used for the global search.
 
-.. method:: ModelStorage.export_data(ids, fields_names)
+.. classmethod:: ModelStorage.browse(ids)
 
-    Return a list of list of values for each ``ids``.
+    Return a list of record instance for the ``ids``.
+
+.. classmethod:: ModelStorage.export_data(records, fields_names)
+
+    Return a list of list of values for each ``records``.
     The list of values follows ``fields_names``.
     Relational fields are defined with ``/`` at any depth.
 
-.. method:: ModelStorage.import_data(fields_names, datas)
+.. classmethod:: ModelStorage.import_data(fields_names, data)
 
     Create records for all values in ``datas``.
     The field names of values must be defined in ``fields_names``.
     It returns a tuple containing: the number of records imported, the last values
     if failed, the exception if failed and the warning if failed.
 
-.. method:: ModelStorage.check_xml_record(ids, values)
+.. classmethod:: ModelStorage.check_xml_record(records, values)
 
-    Verify if the ids are originating from XML data. It is used to prevent
+    Verify if the records are originating from XML data. It is used to prevent
     modification of data coming from XML files. This method must be overiden to
     change this behavior.
 
-.. method:: ModelStorage.check_recursion(ids[, parent])
+.. classmethod:: ModelStorage.check_recursion(records[, parent])
 
     Helper method that checks if there is no recursion in the tree composed
     with ``parent`` as parent field name.
 
-.. method:: ModelStorage.workflow_trigger_trigger(ids)
+.. classmethod:: ModelStorage.validate(records)
 
-    Trigger a trigger event on the :ref:`workflow <topics-workflow>` of
-    records.
+    Validate the integrity of records after creation and modification. This
+    method must be overridden to add validation and must raise an exception if
+    validation fails.
+
+Instance methods:
+
+.. method:: ModelStorage.get_rec_name(name)
+
+    Getter for the :class:`trytond.model.fields.Function` field
+    :attr:`rec_name`.
+
+.. method:: ModelStorage.save()
+
+    Save the modification made on the record instance.
 
 ========
 ModelSQL
@@ -355,18 +390,23 @@ Class attributes are:
 
     Like :attr:`Model._error_messages` but for :attr:`_sql_constraints`
 
-Instance methods:
+Class methods:
 
-.. method:: ModelSQL.default_sequence()
+.. classmethod:: ModelSQL.__table__()
 
-    Return default value for sequence field if the model has one.
+    Return a SQL Table instance for the Model.
 
-.. method:: ModelSQL.table_query()
+.. classmethod:: ModelSQL.table_query()
 
     Could be overrided to use a custom SQL query instead of a table of the
-    database. It should return a tuple containing SQL query and arguments.
+    database. It should return a SQL FromItem.
 
-.. method:: ModelSQL.search_domain(domain[, active_test])
+.. classmethod:: ModelStorage.search(domain[, offset[, limit[, order[, count[, query]]]]])
+
+    Return a list of records that match the :ref:`domain <topics-domain>` or
+    the sql query if query is True.
+
+.. classmethod:: ModelSQL.search_domain(domain[, active_test])
 
     Convert a :ref:`domain <topics-domain>` into a tuple containing:
 
@@ -378,31 +418,30 @@ Instance methods:
 
     - a list of arguments for the tables
 
-=============
-ModelWorkflow
-=============
+========
+Workflow
+========
 
-.. class:: ModelWorkflow
+.. class:: Workflow
 
-It adds workflow capability to :class:`ModelStorage`.
+A Mix-in class to handle transition check.
 
-Instance methods:
+Class attribute:
 
-.. method:: ModelWorkflow.workflow_trigger_create(ids)
+.. attribute:: Workflow._transition_state
 
-    Trigger create event on the :ref:`workflow <topics-workflow>` of records.
+    The name of the field that will be used to check state transition.
 
-.. method:: ModelWorkflow.workflow_trigger_write(ids)
+.. attribute:: Workflow._transitions
 
-    Trigger write event on the :ref:`workflow <topics-workflow>` of records.
+    A set containing tuples of from and to state.
 
-.. method:: ModelWorkflow.workflow_trigger_validate(ids)
+Static methods:
 
-    Trigger validate event on the :ref:`workflow <topics-workflow>` of records.
+.. staticmethod:: Workflow.transition(state)
 
-.. method:: ModelWorkflow.workflow_trigger_delete(ids)
-
-    Trigger delete event on the :ref:`workflow <topics-workflow>` of records.
+    Decorate method to filter ids for which the transition is valid and finally
+    to update the state of the filtered ids.
 
 ==============
 ModelSingleton
@@ -416,8 +455,79 @@ It is commonly used to store configuration value.
 
 .. _singleton: http://en.wikipedia.org/wiki/Singleton_pattern
 
+Class methods:
+
+.. classmethod:: ModelSingleton.get_singleton()
+
+    Return the instance of the unique record if there is one.
+
+===============
+DictSchemaMixin
+===============
+
+.. class:: DictSchemaMixin
+
+A mixin_ for the schema of :class:`trytond.model.fields.Dict` field.
+
+Class attributes are:
+
+.. attribute:: DictSchemaMixin.name
+
+    The definition of the :class:`trytond.model.fields.Char` field for the name
+    of the key.
+
+.. attribute:: DictSchemaMixin.string
+
+    The definition of the :class:`trytond.model.fields.Char` field for the
+    string of the key.
+
+.. attribute:: DictSchemaMixin.type\_
+
+    The definition of the :class:`trytond.model.fields.Selection` field for the
+    type of the key. The available types are:
+
+    * boolean
+    * integer
+    * char
+    * float
+    * numeric
+    * date
+    * datetime
+    * selection
+
+.. attribute:: DictSchemaMixin.digits
+
+    The definition of the :class:`trytond.model.fields.Integer` field for the
+    digits number when the type is `float` or `numeric`.
+
+.. attribute:: DictSchemaMixin.selection
+
+    The definition of the :class:`trytond.model.fields.Text` field to store the
+    couple of key and label when the type is `selection`.
+    The format is a key/label separated by ":" per line.
+
+.. attribute:: DictSchemaMixin.selection_json
+
+    The definition of the :class:`trytond.model.fields.Function` field to
+    return the JSON_ version of the :attr:`selection`.
+
+Static methods:
+
+.. staticmethod:: DictSchemaMixin.default_digits()
+
+    Return the default value for :attr:`digits`.
+
+Class methods:
+
+.. classmethod:: DictSchemaMixin.get_keys(records)
+
+    Return the definition of the keys for the records.
+
 Instance methods:
 
-.. method:: ModelSingleton.get_singleton_id()
+.. method:: DictSchemaMixin.get_selection_json(name)
 
-    Return the id of the unique record if there is one.
+    Getter for the :attr:`selection_json`.
+
+.. _mixin: http://en.wikipedia.org/wiki/Mixin
+.. _JSON: http://en.wikipedia.org/wiki/Json
